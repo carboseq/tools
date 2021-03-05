@@ -1,6 +1,7 @@
 numpy
 matplotlib
 pandas
-sqlalchemy as sal
+sqlalchemy
 sqlite3
 time
+ipywidgets
