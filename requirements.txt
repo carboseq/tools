@@ -5,3 +5,8 @@ sqlalchemy
 ipywidgets
 xlrd
 openpyxl
+bqplot
+ipympl
+ipyvolume
+scipy
+voila
