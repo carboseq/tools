@@ -1,0 +1,6 @@
+numpy
+matplotlib
+pandas
+sqlalchemy as sal
+sqlite3
+time
