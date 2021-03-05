@@ -3,3 +3,5 @@ matplotlib
 pandas
 sqlalchemy
 ipywidgets
+xlrd
+openpyxl
