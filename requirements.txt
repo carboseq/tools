@@ -2,6 +2,6 @@ numpy
 matplotlib
 pandas
 sqlalchemy
-sqlite3
-time
 ipywidgets
+xlrd
+openpyxl
