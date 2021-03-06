@@ -10,3 +10,4 @@ ipympl
 ipyvolume
 scipy
 voila
+xlsx2csv
