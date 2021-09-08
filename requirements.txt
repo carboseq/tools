@@ -12,3 +12,4 @@ scipy
 voila
 xlsx2csv
 upsetplot
+ipyleaflet
