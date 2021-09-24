@@ -13,3 +13,4 @@ voila
 xlsx2csv
 upsetplot
 ipyleaflet
+xlsxwriter
