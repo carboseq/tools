@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="utf-8">
+	<link rel="shortcut icon" href="img/favicon.png" />
+	<title>EJP template checker (JS v0.1.0)</title>
+    <script src="https://code.jquery.com/jquery-3.4.1.min.js"></script>
+	<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-eOJMYsd53ii+scO/bJGFsiCZc+5NDVN2yr8+0RDqr0Ql0h+rP48ckxlpbzKgwra6" crossorigin="anonymous">
+	<script src="https://cdn.jsdelivr.net/pyodide/v0.18.1/full/pyodide.js"></script>
+</head>
+<body>
+    <div class='container'>
+        <h1>EJPsoil automatic template check</h1>
+        <p id='loading'>Loading...</p>
+        <input id='templateURL' type="text" class="form-control" placeholder="Template URL" aria-label="Template URL" aria-describedby="basic-addon1">
+        <button id='checkBtn' type="button" class="btn btn-warning">Checking...</button>
+        <div id='output'></div>
+        <footer>v0.1.0 made using <a href="https://pyodide.org/">pyodide</a></a></footer>
+    </div>
+
+
+    <script>
+        // get url template parameter if available
+        console.log(document.getElementById('templateURL').value)
+        const queryString = window.location.search
+        const url = new URLSearchParams(queryString)
+        var c = url.get("template")
+        console.log(c)
+        if (c != undefined) {
+            document.getElementById('templateURL').value = c
+        } else {
+            let btn = document.getElementById('checkBtn')
+            btn.innerHTML = 'Check template'
+            btn.setAttribute('class', 'btn btn-primary')
+                
+        }
+
+        let pyodide;
+        async function main() {
+            // load pyodide itself
+            pyodide = await loadPyodide({ indexURL : "https://cdn.jsdelivr.net/pyodide/v0.18.1/full/" })
+            
+            // load all functions used to check
+            await pyodide.loadPackage(['numpy', 'pandas'])
+            pyodide.runPython(`
+import pandas as pd
+import numpy as np
+import time
+import pyodide
+
+sheetNames = ['experiment', 'reference', 'treatment', 'soil-type', 'tillage', 'crops',
+              'amendment', 'irrigation', 'pest-weed', 'grazing',
+             'soil-crop-measurement', 'data', 'dropDownList']
+
+out = ''
+def dump(text, level='warning'):
+    global out
+    out += '<div class="alert alert-{:s}" role="alert">{:s}</div>'.format(level, text)
+    # trigger some plotting of out in the JS
+  
+
+
+def readExcel(url):
+    sheetNames = ['experiment', 'reference', 'soil-type', 'treatment', 
+                  'tillage', 'crops', 'amendment', 'irrigation', 'data-crop', 'data-soil']
+    dfdic = {}
+    for sheet in sheetNames:
+        df = pd.read_csv(pyodide.open_url(url.split('/edit')[0] + '/gviz/tq?tqx=out:csv&sheet=' + sheet))
+        dfdic[sheet] = df.rename(columns=str2col[sheet])
+    return dfdic
+
+# numeric types
+ntypes = {
+    'experiment': {
+        'Latitude': 'float',
+        'Longitude': 'float',
+    },
+    'reference': {
+        'Publication year': 'float',
+    },
+    'soil-type': {
+        'Top depth of layer': 'float',
+        'Bottom depth of layer': 'float',
+        'Clay (< 0.002 mm)': 'float',
+        'Silt (0.002 - 0.05 mm)': 'float',
+        'Sand (0.05 - 2 mm)': 'float',
+        'Gravel (> 2 mm)': 'float'
+    },
+    'treatment': {
+        'Year started': 'float',
+        #'Year ended': 'float'
+    },
+    'tillage': {
+        'Tillage depth': 'float',
+    },
+    'crops': {
+        'Harvesting frequency': 'float',
+    },
+    'amendment': {
+        'Fertilizer/Amendment application rate': 'float',
+        'Amendment water content': 'float',
+        'Amendment C': 'float',
+        'Amendment N': 'float',
+        'Amendment P': 'float',
+        'Amendment K': 'float',
+    },
+    'irrigation': {
+        'Amount of water': 'float',
+        'Irrigation frequency': 'float',
+        #'Drainage spacing': 'float',
+        #'Drainage depth': 'float',
+    },
+    'data-crop': {
+        'Sampling year': 'float',
+        'Harvested yield': 'float',
+        'Harvested yield water content amount': 'float',
+        'Residue above-ground': 'float',
+        'Residue stubble': 'float',
+        'Residue roots': 'float',
+        'Below-ground sampling depth': 'float',
+    },
+    'data-soil': {
+        'Sampling year': 'float',
+        'Depth from': 'float',
+        'Depth to': 'float',
+        'SOC conc': 'float',
+        'SOC conc SD': 'float',
+        'SOC conc SE': 'float',
+        'SOC conc nb samples': 'float',
+        'Bulk density': 'float',
+        'Bulk density SD': 'float',
+        'Bulk density SE': 'float',
+        'Bulk density nb samples': 'float',
+        'SOC stock': 'float',
+        'SOC stock SD': 'float',
+        'SOC stock SE': 'float',
+        'SOC stock nb samples': 'float',
+        'pH': 'float',
+    }
+}
+
+# check dtype
+def text2num(x):
+    try:
+        if type(x) == datetime:
+            return x.year
+        else:
+            return float(x)
+    except:
+        try:
+            return float(str(x).replace(',', '.'))
+        except:
+            return x
+def text2numFix(x):
+    try:
+        if type(x) == datetime:
+            return x.year
+        else:
+            return float(x)
+    except:
+        try:
+            return float(str(x).replace(',', '.'))
+        except:
+            if (len(str(x).strip()) == 0) | (str(x) == '-'):
+                return np.nan
+            else:
+                try:
+                    return np.mean([float(a) for a in str(x).split('-')])
+                except:
+                    return np.nan
+
+def checkType(dfdic, dic=None, fix=False):
+    if dic is None:
+        dic = {}
+    wrongTypes = {}
+    for sheet in ntypes.keys():
+        for col in ntypes[sheet].keys():
+            try:
+                dfdic[sheet][col] = dfdic[sheet][col].astype(ntypes[sheet][col])
+            except Exception as e:
+                # attempt to do automatic conversion
+                if fix:
+                    dfdic[sheet][col] = dfdic[sheet][col].apply(text2numFix)
+                else:
+                    dfdic[sheet][col] = dfdic[sheet][col].apply(text2num)
+
+                # second attempt to convert the entire column
+                etext = str(e).split(':')[-1]
+                try:
+                    dfdic[sheet][col] = dfdic[sheet][col].astype(ntypes[sheet][col])
+                    if ',' in etext or '-' in etext:
+                        dump('{:s} > {:s}: Wrong type: {:s} automatically converted to {:s}'.format(
+                            sheet, col, str(e), str(text2numFix(etext.strip()[1:-1]))), 'info')
+                except Exception as e:
+                    dump('{:s} > {:s}: Wrong type: {:s}'.format(sheet, col, str(e)), 'warning')
+
+                    # log the columns that couldn't even be converted automatically
+                    if sheet in wrongTypes.keys():
+                        wrongTypes[sheet].append(col)
+                    else:
+                        wrongTypes[sheet] = [col]
+    dic['wrong_types'] = wrongTypes
+    return dfdic
+#checkType(dfdic)
+
+# check that all ID colums contains unique values
+def checkID(dfdic, dic=None, fix=False):
+    tocheck = [
+        ('experiment', 'Experiment ID'),
+        ('treatment', 'Treatment ID'),
+        ('crops', 'Crop ID'),
+        ('reference', 'Publication ID')
+    ]
+    if dic is None:
+        dic = {}
+    ok = True
+    # check that all rows have all ID specified
+    dic['missing_id'] = {}
+    for sheet in sheetNames[:-1]:
+        if sheet in dfdic.keys():
+            df = dfdic[sheet]
+            tdic = {}
+            for col in ['Experiment ID', 'Treatment ID', 'Crop ID', 'Rotation']:
+                if col in df.columns:
+                    nanRow = list(np.where(df[col].values == 'nan')[0] + 5) # so it correspond to excel rows
+                    if len(nanRow) > 0:
+                        ok = False
+                        if fix:
+                            expids = df[col].values
+                            a = expids[0]
+                            for l in range(1, len(expids)):
+                                if expids[l] == 'nan':
+                                    expids[l] = a
+                                else:
+                                    a = expids[l]
+                            if np.sum(expids == 'nan') == 0:
+                                dump('{:s} > {:s}: Missing ID added for rows {:s}'.format(
+                                sheet, col, ', '.join(list(map(str, nanRow)))), 'info')
+                                dfdic[sheet].loc[:, col] = expids
+                            else:
+                                tdic[col] = list(map(str, nanRow))
+                                dump('{:s} > {:s}: Missing ID for rows {:s}'.format(
+                                sheet, col, ', '.join(list(map(str, nanRow)))), 'warning')
+                        else:
+                            tdic[col] = list(map(str, nanRow))
+                            dump('{:s} > {:s}: Missing ID for rows {:s}'.format(
+                                sheet, col, ', '.join(list(map(str, nanRow)))), 'warning')
+            if len(tdic.keys()) > 0:
+                dic[sheet] = tdic
+
+    # check Experiment ID
+    df = dfdic['experiment'].replace('nan', pd.NA)
+    s_expid = df['Experiment ID'].dropna().value_counts()
+    if np.sum(s_expid > 1) > 0:
+        ok = False
+        dump('experiment > Experiment ID: {:s} are not unique'.format(
+            str(s_expid[s_expid > 1].index.tolist())), 'danger')
+        dic['u_expid'] = False
+    else:
+        dic['u_expid'] = True
+
+    # check Treatment ID
+    df = dfdic['treatment'].replace('nan', pd.NA)
+    df['id'] = df['Experiment ID'] + '|||' + df['Treatment ID']
+    df.loc[df['Treatment ID'].isna(), 'id'] = pd.NA
+    s_treatid = df['id'].value_counts()
+    if np.sum(s_treatid > 1) > 0:
+        ok = False
+        dic['u_treatid'] = False
+        for j in np.where(s_treatid > 1)[0]:
+            expid, treatid = s_treatid.index[j].split('|||')
+            dump('treatment > Treatment ID: {:s} is not unique for ExpID. {:s}'.format(
+                treatid, expid), 'danger')
+    else:
+        dic['u_treatid'] = True
+
+    # check Crop ID
+    df = df.drop('id', axis=1)
+    df = dfdic['crops'].replace('nan', pd.NA)
+    df['id'] = df['Experiment ID'] + '|||' + df['Treatment ID'] + '|||' + df['Crop ID']
+    df.loc[df['Crop ID'].isna(), 'id'] = pd.NA
+    s_cropid = df['id'].value_counts()
+    if np.sum(s_cropid > 1) > 0:
+        ok = False
+        dic['u_cropid'] = False
+        for j in np.where(s_cropid > 1)[0]:
+            expid, treatid, cropid = s_cropid.index[j].split('|||')
+            dump('crops > Crop ID: {:s} is not unique for Treatment ID {:s} in Experiment ID {:s}'.format(
+                 cropid, treatid, expid), 'danger')
+    else:
+        dic['u_cropid'] = True
+    df = df.drop('id', axis=1)
+    if ok:
+        dump('All indexes are unique.', 'success')
+    
+    return dfdic
+
+# check that all Treatment ID are specified in subsequent sheet
+def checkTreatmentID(dfdic, dic=None, fix=False):
+    """Check that all treatment ID are specified in all sheets.
+    If ´fix´ is True, then we add empty rows with the missing Treatment ID.
+    """
+    if dic is None:
+        dic = {}
+    dico = {}
+    experimentIDs = dfdic['experiment']['Experiment ID'].unique()
+    for expid in experimentIDs:
+        dic1 = {}
+        dftreat = dfdic['treatment']
+        ie = dftreat['Experiment ID'] == expid
+        treatmentIDs = dftreat[ie]['Treatment ID'].unique()
+        tocheck = ['tillage', 'crops', 'amendment', 'irrigation', 'pest-weed', 'grazing']
+        ok = True
+        for a in tocheck:
+            if a in dfdic.keys():
+                df = dfdic[a]
+                ie = df['Experiment ID'] == expid
+                specified = df[ie]['Treatment ID'].values
+                icommon = np.in1d(treatmentIDs, specified)
+                if np.sum(~icommon) > 0:  # some treatment are not specified
+                    ok = False
+                    dic1[a] = list(treatmentIDs[~icommon])
+                    if fix:
+                        for t in treatmentIDs[~icommon]:
+                            dfdic[a] = dfdic[a].append({'Experiment ID': expid, 'Treatment ID': t},
+                                                        ignore_index=True)
+                        #dump('{:s} > Treatment IDs "{:s}" automatically added for Experiment ID "{:s}"'.format(
+                        #     a, '", "'.join(treatmentIDs[~icommon]), expid), 'info')
+                    else:
+                        pass
+                        #dump('{:s} > Treatment IDs "{:s}" are not specified for Experiment ID "{:s}"'.format(
+                        #     a, '", "'.join(treatmentIDs[~icommon]), expid), 'danger')
+        dico[expid] = dic1
+
+        # additional check for the soil-type tab on expid only (not treatid there)
+        for expid in experimentIDs:
+            if expid not in dfdic['soil-type']['Experiment ID'].tolist():
+                dump('soil-type > Experiment ID "{:s}" automatically added but row is empty!'.format(expid), 'info')
+                if expid not in dico.keys():
+                    dico[expid] = {'soil-type': []}
+                else:
+                    dico[expid].update({'soil-type': []})
+        if ok:
+            dump('{:s}: all treatment IDs are specified in the different sheets.'.format(expid), 'success')
+    dic['s_treatid'] = dico
+    return dfdic
+
+dropDownList = {
+    'Country': ['Afghanistan', 'Albania', 'Algeria', 'American Samoa', 'Andorra', 'Angola', 'Anguilla', 'Antarctica', 'Antigua and Barbuda', 'Argentina', 'Armenia', 'Aruba', 'Australia', 'Austria', 'Azerbaijan', 'Bahamas', 'Bahrain', 'Bangladesh', 'Barbados', 'Belarus', 'Belgium', 'Belize', 'Benin', 'Bermuda', 'Bhutan', 'Bolivia', 'Bosnia and Herzegovina', 'Botswana', 'Bouvet Island', 'Brazil', 'British Indian Ocean Territory', 'Brunei Darussalam', 'Bulgaria', 'Burkina Faso', 'Burundi', 'Cambodia', 'Cameroon', 'Canada', 'Cape Verde', 'Cayman Islands', 'Central African Republic', 'Chad', 'Chile', 'China', 'Christmas Island', 'Cocos (Keeling) Islands', 'Colombia', 'Comoros', 'Congo', 'Congo, The Democratic Republic of the', 'Cook Islands', 'Costa Rica', "Cote D'Ivoire", 'Croatia', 'Cuba', 'Cyprus', 'Czech Republic', 'Denmark', 'Djibouti', 'Dominica', 'Dominican Republic', 'Ecuador', 'Egypt', 'El Salvador', 'Equatorial Guinea', 'Eritrea', 'Estonia', 'Ethiopia', 'Falkland Islands (Malvinas)', 'Faroe Islands', 'Fiji', 'Finland', 'France', 'French Guiana', 'French Polynesia', 'French Southern Territories', 'Gabon', 'Gambia', 'Georgia', 'Germany', 'Ghana', 'Gibraltar', 'Greece', 'Greenland', 'Grenada', 'Guadeloupe', 'Guam', 'Guatemala', 'Guernsey', 'Guinea', 'Guinea-Bissau', 'Guyana', 'Haiti', 'Heard Island and Mcdonald Islands', 'Holy See (Vatican City State)', 'Honduras', 'Hong Kong', 'Hungary', 'Iceland', 'India', 'Indonesia', 'Iran, Islamic Republic Of', 'Iraq', 'Ireland', 'Isle of Man', 'Israel', 'Italy', 'Jamaica', 'Japan', 'Jersey', 'Jordan', 'Kazakhstan', 'Kenya', 'Kiribati', "Korea, Democratic People's Republic of", 'Korea, Republic of', 'Kuwait', 'Kyrgyzstan', "Lao People's Democratic Republic", 'Latvia', 'Lebanon', 'Lesotho', 'Liberia', 'Libyan Arab Jamahiriya', 'Liechtenstein', 'Lithuania', 'Luxembourg', 'Macao', 'Macedonia, The Former Yugoslav Republic of', 'Madagascar', 'Malawi', 'Malaysia', 'Maldives', 'Mali', 'Malta', 'Marshall Islands', 'Martinique', 'Mauritania', 'Mauritius', 'Mayotte', 'Mexico', 'Micronesia, Federated States of', 'Moldova, Republic of', 'Monaco', 'Mongolia', 'Montserrat', 'Morocco', 'Mozambique', 'Myanmar', 'Namibia', 'Nauru', 'Nepal', 'Netherlands', 'Netherlands Antilles', 'New Caledonia', 'New Zealand', 'Nicaragua', 'Niger', 'Nigeria', 'Niue', 'Norfolk Island', 'Northern Mariana Islands', 'Norway', 'Oman', 'Pakistan', 'Palau', 'Palestinian Territory, Occupied', 'Panama', 'Papua New Guinea', 'Paraguay', 'Peru', 'Philippines', 'Pitcairn', 'Poland', 'Portugal', 'Puerto Rico', 'Qatar', 'Reunion', 'Romania', 'Russian Federation', 'Rwanda', 'Saint Helena', 'Saint Kitts and Nevis', 'Saint Lucia', 'Saint Pierre and Miquelon', 'Saint Vincent and the Grenadines', 'Samoa', 'San Marino', 'Sao Tome and Principe', 'Saudi Arabia', 'Senegal', 'Serbia and Montenegro', 'Seychelles', 'Sierra Leone', 'Singapore', 'Slovakia', 'Slovenia', 'Solomon Islands', 'Somalia', 'South Africa', 'South Georgia and the South Sandwich Islands', 'Spain', 'Sri Lanka', 'Sudan', 'Suriname', 'Svalbard and Jan Mayen', 'Swaziland', 'Sweden', 'Switzerland', 'Syrian Arab Republic', 'Taiwan, Province of China', 'Tajikistan', 'Tanzania, United Republic of', 'Thailand', 'Timor-Leste', 'Togo', 'Tokelau', 'Tonga', 'Trinidad and Tobago', 'Tunisia', 'Turkey', 'Turkmenistan', 'Turks and Caicos Islands', 'Tuvalu', 'Uganda', 'Ukraine', 'United Arab Emirates', 'United Kingdom', 'United States', 'United States Minor Outlying Islands', 'Uruguay', 'Uzbekistan', 'Vanuatu', 'Venezuela', 'Viet Nam', 'Virgin Islands, British', 'Virgin Islands, U.S.', 'Wallis and Futuna', 'Western Sahara', 'Yemen', 'Zambia', 'Zimbabwe'],
+    'Land use prior experiment': ['Agricultural areas', '> Arable land', '>> Non-irrigated arable land', '>> Permanently irrigated land', '>> Rice fields', '> Permanent crops', '>> Vineyard', '>> Fruit trees', '>> Berry plantation', '>> Olive grove', '> Pastures', '> Fallows', '> Heterogeneous agricultural areas', '>> Annual crops associated with permanent crops', '>> Complex cultivation patterns', '>> Land principally occupied by agriculture, with significant areas of natural vegetation', '>> Agro-forestry areas', 'Forests and semi-natural areas', '> Forests', '>> Broad-leaved forest', '>> Coniferous forest', '>> Mixed forest', '> Shrub and/or herbaceous vegetation association', '>> Natural grassland', '>> Moors and heathland', '>> Sclerophyllous vegetation', '>> Transitional woodland shrub', '> Open spaces with little or no vegetation', '>> Beaches, dunes, sands', '>> Bare rock', '>> Sparsely vegetated areas', '>> Burnt areas', '>> Glaciers and perpetual snow', 'Wetlands', '> Inland wetlands', '>> Inland marshes', '>> Peatbogs', '> Coastal wetlands', '>> Salt marshes', '>> Salines', '>> Intertidal flats', 'Artificial Surfaces', '> Mineral extraction sites', '> Dump sites', '> Green urban areas'],
+    'Experiment type': ['Field', 'Lab', 'Incubation'],
+    'Publication type': ['Journal article (meta-analysis)', 'Journal article (review)', 'Journal article', 'Report', 'Poster', 'Book', 'Master thesis', 'PhD thesis', 'Unpublished'],
+    'Soil Texture': ['Sand (unspecified, S)', 'Loamy sand (LS)', 'Sandy loam (SL)', 'Sandy clay loam (SCL)', 'Silt loam (SiL)', 'Silty clay loam (SiCL)', 'Clay loam (CL)', 'Loam (L)', 'Silt (Si)', 'Sandy clay (SC)', 'Silty clay (SiC)', 'Clay (C)', 'Heavy clay (HC)', 'Very fine sand (VFS)', 'Fine sand (FS)', 'Medium sand (MS)', 'Coarse sand (CS)', 'Sand, unsorted (US)', 'Loamy very fine sand (LVFS)', 'Loamy fine sand (LFS)', 'Loamy coarse sand (LCS)', 'Fine sandy loam (FSL)', 'Coarse sandy loam (CSL)'],
+    'Soil group WRB': ['Acrisol', 'Alisol', 'Andosol', 'Anthrosol', 'Arenosol', 'Calcisol', 'Cambisol', 'Chernozem', 'Cryosol', 'Durisol', 'Ferralsol', 'Fluvisol', 'Gleysol', 'Gypsisol', 'Histosol', 'Kastanozem', 'Leptosol', 'Lixisol', 'Luvisol', 'Nitisol', 'Phaeozem', 'Planosol', 'Plinthosol', 'Podzol', 'Regosol', 'Retisol', 'Solonchak', 'Solonetz', 'Stagnosol', 'Technosol', 'Umbrisol', 'Vertisol'],
+    'Soil group WRB qualifier': ['Abruptic', 'Acric', 'Akrofluvic', 'Akroskeletic', 'Albic', 'Alic', 'Aluandic', 'Andic', 'Anofluvic', 'Anthraquic', 'Anthromollic', 'Anthroumbric', 'Argisodic', 'Brunic', 'Calcaric', 'Calcic', 'Calcifractic', 'Cambic', 'Carbic', 'Chernic', 'Chromic', 'Colluvic', 'Columnic', 'Cryic', 'Dolomitic', 'Drainic', 'Duric', 'Dystric', 'Ekranic', 'Endocalcaric', 'Endocalcic', 'Endodolomitic', 'Endosalic', 'Entic', 'Eutric', 'Eutrosilic', 'Ferralic', 'Ferric', 'Ferritic', 'Fibric', 'Floatic', 'Fluvic', 'Folic', 'Fractic', 'Fragic', 'Garbic', 'Geric', 'Gibbsic', 'Glacic', 'Gleyic', 'Glossic', 'Greyzemic', 'Gypsic', 'Gypsifractic', 'Gypsiric', 'Haplic', 'Hemic', 'Histic', 'Hortic', 'Hydragric', 'Hydric', 'Hyperduric', 'Hyperferritic', 'Hyperhydragric', 'Hypersideralic', 'Hyperskeletic', 'Hyperthionic', 'Hypothionic', 'Irragric', 'Isolatic', 'Lamellic', 'Leptic', 'Linic', 'Lithic', 'Lixic', 'Luvic', 'Manganiferric', 'Mawic', 'Mollic', 'Murshic', 'Muusic', 'Natric', 'Neocambic', 'Nudiargic', 'Nudilithic', 'Nudinatric', 'Nudipetric', 'Oligeoeutric', 'Ombric', 'Orthodystric', 'Orthoeutric', 'Orthofluvic', 'Orthoskeletic', 'Ortsteinic', 'Oxyaquic', 'Oxygleyic', 'Pantofluvic', 'Pellic', 'Petric', 'Petrocalcic', 'Petroduric', 'Petrogypsic', 'Petroplinthic', 'Petrosalic', 'Pisoplinthic', 'Plaggic', 'Plaggic', 'Plinthic', 'Plinthofractic', 'Pretic', 'Protic', 'Protoargic', 'Protosalic', 'Protosodic', 'Protostagnic', 'Prototephric', 'Reductaquic', 'Reductic', 'Reductigleyic', 'Relictigleyic', 'Relictistagnic', 'Relictiturbic', 'Rendzic', 'Retic', 'Rheic', 'Rhodic', 'Rockic', 'Rubic', 'Rustic', 'Salic', 'Sapric', 'Sideralic', 'Silandic', 'Skeletic', 'Sodic', 'Someric', 'Somerimollic', 'Somerirendzic', 'Someriumbric', 'Spodic', 'Spolic', 'Stagnic', 'Subaquatic', 'Technoleptic', 'Technolithic', 'Technoskeletic', 'Tephric', 'Terric', 'Thionic', 'Tidalic', 'Tonguichernic', 'Tonguimollic', 'Tonguiumbric', 'Totilamellic', 'Turbic', 'Umbric', 'Urbic', 'Vermic', 'Vertic', 'Vitric', 'Xanthic'],
+    'Soil group WRB specifier': ['Amphi', 'Ano', 'Bathy', 'Endo', 'Epi', 'Kato', 'Panto', 'Supra', 'Thapto'],
+    'Soil type USDA': ['Alfisols', '> Aqualfs', '>> Albaqualfs', '>> Cryaqualfs', '>> Endoaqualfs', '>> Epiaqualfs', '>> Fragiaqualfs', '>> Glossaqualfs', '>> Natraqualfs', '>> Ochraqualfs', '>> Vermaqualfs', '> Boralfs', '>> Cryoboralfs', '>> Eutroboralfs', '>> Fragiboralfs', '>> Glossoboralfs', '> Cryalfs', '>> Glossocryalfs', '>> Haplocryalfs', '>> Palecryalfs', '> Udalfs', '>> Fragiudalfs', '>> Fraglossudalfs', '>> Glossudalfs', '>> Hapludalfs', '>> Kanhapludalfs', '>> Natrudalfs', '>> Paleudalfs', '>> Rhodudalfs', '> Ustalfs', '>> Haplustalfs', '>> Natrustalfs', '>> Paleustalfs', '>> Rhodustalfs', '> Xeralfs', '>> Durixeralfs', '>> Fragixeralfs', '>> Haploxeralfs', '>> Natrixeralfs', '>> Palexeralfs', '>> Rhodoxeralfs', 'Andisols', '> Aquands', '>> Cryaquands', '>> Duraquands', '>> Endoaquands', '>> Epiaquands', '>> Melanaquands', '>> Placaquands', '>> Vitraquands', '> Cryands', '>> Duricryands', '>> Fulvicryands', '>> Haplocryands', '>> Melanocryands', '>> Vitricryands', '> Torrands', '>> Duritorrands', '>> Haplotorrands', '>> Vitritorrands', '> Udands', '>> Durudands', '>> Fulvudands', '>> Hapludands', '>> Hydrudands', '>> Melanudands', '>> Placudands', '> Ustands', '>> Durustands', '>> Haplustands', '> Vitrands', '>> Udivitrands', '>> Ustivitrands', '> Xerands', '>> Haploxerands', '>> Melanoxerands', '>> Vitrixerands', 'Aridisols', '> Argids', '>> Calciargids', '>> Gypsiargids', '>> Haplargids', '>> Natrargids', '>> Paleargids', '>> Petroargids', '> Calcids', '>> Haplocalcids', '>> Petrocalcids', '> Cambids', '>> Aquicambids', '>> Haplocambids', '>> Petrocambids', '> Cryids', '>> Argicryids', '>> Calcicryids', '>> Petrocryids', '> Durids', '>> Argidurids', '>> Haplodurids', '>> Natridurids', '> Gypsids', '>> Argigypsids', '>> Calcigypsids', '>> Haplogypsids', '>> Natrigypsids', '>> Petrogypsids', '> Orthids', '>> Calciorthids', '>> Camborthids', '>> Durorthids', '>> Gypsiorthids', '>> Paleorthids', '>> Salorthids', '> Salids', '>> Aquisalids', '>> Haplosalids', 'Entisols', '> Aquents', '>> Cryaquents', '>> Endoaquents', '>> Epiaquents', '>> Fluvaquents', '>> Haplaquents', '>> Hydraquents', '>> Psammaquents', '>> Sulfaquents', '> Arents', '>> Torriarents', '>> Udarents', '>> Ustarents', '>> Xerarents', '> Fluvents', '>> Cryofluvents', '>> Gelifluvents', '>> Torrifluvents', '>> Udifluvents', '>> Ustifluvents', '>> Xerofluvents', '> Orthents', '>> Cryorthents', '>> Gelorthents', '>> Torriorthents', '>> Udorthents', '>> Ustorthents', '>> Xerorthents', '> Psamments', '>> Cryopsamments', '>> Quartzipsamments', '>> Torripsamments', '>> Udipsamments', '>> Ustipsamments', '>> Xeropsamments', '> Wassents', '>> Fluviwassents', '>> Frasiwassents', '>> Haplowassents', '>> Hydrowassents', '>> Psammowassents', '>> Sulfiwassents', 'Gelisols', '> Histels', '>> Folistels', '>> Hemistels', '> Orthels', '>> Aquorthels', '>> Haplorthels', '>> Historthels', '> Turbels', '>> Aquiturbels', '>> Haploturbels', '>> Histoturbels', '>> Fibristels', 'Histosols', '> Fibrists', '>> Cryofibrists', '>> Haplofibrists', '>> Medifibrists', '>> Sphagnofibrists', '> Folists', '>> Cryofolists', '>> Torrifolists', '>> Udifolists', '>> Ustifolists', '> Hemists', '>> Borohemists', '>> Cryohemists', '>> Haplohemists', '>> Medihemists', '>> Sulfihemists', '> Saprists', '>> Borosaprists', '>> Cryosaprists', '>> Haplosaprists', '>> Medisaprists', '>> Sulfisaprists', '> Wassists', '>> Frasiwassists', '>> Sulfiwassists', 'Inceptisols', '> Andepts', '>> Dystrandepts', '>> Vitrandepts', '> Aquepts', '>> Cryaquepts', '>> Endoaquepts', '>> Epiaquepts', '>> Fragiaquepts', '>> Gelaquepts', '>> Halaquepts', '>> Haplaquepts', '>> Humaquepts', '>> Petraquepts', '> Cryepts', '>> Calcicryepts', '>> Dystrocryepts', '>> Haplocryepts', '>> Humicryepts', '> Gelepts', '>> Dystrogelepts', '>> Eutrogelepts', '>> Haplogelepts', '>> Humigelepts', '> Ochrepts', '>> Cryochrepts', '>> Dystrochrepts', '>> Eutrochrepts', '>> Fragiochrepts', '>> Ustochrepts', '>> Xerochrepts', '> Tropepts', '>> Dystropepts', '> Udepts', '>> Durudepts', '>> Dystrudepts', '>> Eutrudepts', '>> Fragiudepts', '>> Humudepts', '> Umbrepts', '>> Haplumbrepts', '>> Xerumbrepts', '> Ustepts', '>> Calciustepts', '>> Durustepts', '>> Dystrustepts', '>> Haplustepts', '>> Humustepts', '> Xerepts', '>> Calcixerepts', '>> Durixerepts', '>> Dystroxerepts', '>> Fragixerepts', '>> Haploxerepts', '>> Humixerepts', 'Mollisols', '> Albolls', '>> Argialbolls', '> Aquolls', '>> Argiaquolls', '>> Calciaquolls', '>> Cryaquolls', '>> Duraquolls', '>> Endoaquolls', '>> Epiaquolls', '>> Haplaquolls', '>> Natraquolls', '> Borolls', '>> Argiborolls', '>> Calciborolls', '>> Cryoborolls', '>> Haploborolls', '>> Natriborolls', '>> Paleborolls', '> Cryolls', '>> Argicryolls', '>> Calcicryolls', '>> Duricryolls', '>> Haplocryolls', '>> Natricryolls', '>> Palecryolls', '> Gelolls', '>> Haplogelolls', '> Rendolls', '>> Cryrendolls', '>> Haprendolls', '>> Rendolls', '> Udolls', '>> Argiudolls', '>> Calciudolls', '>> Hapludolls', '>> Natrudolls', '>> Paleudolls', '>> Vermudolls', '> Ustolls', '>> Argiustolls', '>> Calciustolls', '>> Durustolls', '>> Haplustolls', '>> Natrustolls', '>> Paleustolls', '> Xerolls', '>> Argixerolls', '>> Calcixerolls', '>> Durixerolls', '>> Haploxerolls', '>> Natrixerolls', '>> Palexerolls', 'Oxisols', '> Aquox', '>> Haplaquox', '> Perox', '>> Acroperox', '>> Eutroperox', '>> Haploperox', '>> Kandiperox', '> Torrox', '>> Eutrotorrox', '>> Haplotorrox', '> Udox', '>> Acrudox', '>> Hapludox', '>> Kandiudox', '> Ustox', '>> Acrustox', '>> Eutrustox', '>> Haplustox', '>> Kandiustox', 'Spodosols', '> Aquods', '>> Alaquods', '>> Cryaquods', '>> Duraquods', '>> Endoaquods', '>> Epiaquods', '>> Fragiaquods', '>> Sideraquods', '> Cryods', '>> Duricryods', '>> Haplocryods', '>> Humicryods', '> Gelods', '>> Haplogelods', '> Humods', '>> Durihumods', '>> Haplohumods', '> Orthods', '>> Alorthods', '>> Cryorthods', '>> Durorthods', '>> Fragiorthods', '>> Haplorthods', '>> Placorthods', 'Ultisols', '> Aquults', '>> Albaquults', '>> Endoaquults', '>> Epiaquults', '>> Fragiaquults', '>> Ochraquults', '>> Paleaquults', '>> Umbraquults', '> Humults', '>> Haplohumults', '>> Kandihumults', '>> Kanhaplohumults', '>> Palehumults', '> Udults', '>> Fragiudults', '>> Hapludults', '>> Kandiudults', '>> Kanhapludults', '>> Paleudults', '>> Rhodudults', '> Ustults', '>> Haplustults', '> Xerults', '>> Haploxerults', '>> Palexerults', 'Vertisols', '> Aquerts', '>> Calciaquerts', '>> Duraquerts', '>> Dystraquerts', '>> Endoaquerts', '>> Epiaquerts', '>> Natraquerts', '> Cryerts', '>> Haplocryerts', '>> Humicryerts', '> Torrerts', '>> Calcitorrerts', '>> Gypsitorrerts', '>> Haplotorrerts', '>> Salitorrerts', '> Uderts', '>> Dystruderts', '>> Hapluderts', '> Usterts', '>> Calciusterts', '>> Gypsiusterts', '>> Haplusterts', '> Xererts', '>> Calcixererts', '>> Durixererts', '>> Haploxererts', 'Other Great Groups', '> Acraquox', '> Acrohumox', '> Acrorthox', '> Acrotorrox', '> Agrudalf', '> Andaquept', '> Anhyorthel', '> Anhyturbel', '> Anthracambid', '> Arent', '> Argiorthel', '> Borofibrist', '> Borofolist', '> Chromoxerert', '> Chromudert', '> Chromustert', '> Cryandept', '> Cryohumod', '> Cryumbrept', '> Durandept', '> Duraqualf', '> Durargid', '> Durochrept', '> Durustalf', '> Dystrustert', '> Eutrandept', '> Eutraquox', '> Eutrocryept', '> Eutropept', '> Eutrorthox', '> Eutrudox', '> Ferrod', '> Ferrudalf', '> Fragihumod', '> Fragiumbrept', '> Gelicryand', '> Gibbsiaquox', '> Gibbsihumox', '> Gibbsiorthox', '> Glacistel', '> Gypsicryid', '> Haplanthrept', '> Haplaquand', '> Haplaquod', '> Haplocryid', '> Hydrocryand', '> Haplohumox', '> Haplorthox', '> Hapludept', '> Humitropept', '> Hydrandept', '> Kandiaqualf', '> Kandiaquult', '> Kandiudalf', '> Kandiustalf', '> Kandiustult', '> Kanhaplaquult', '> Kanhaplustalf', '> Kanhaplustult', '> Luvifibrist', '> Luvihemist', '> Medifolist', '> Molliturbel', '> Mollorthel', '> Nadurargid', '> Natralboll', '> Natriboralf', '> Ochraquox', '> Paleboralf', '> Palecryroll', '> Paleustult', '> Pelloxerert', '> Pelludert', '> Pellustert', '> Placandept', '> Placaquept', '> Placaquod', '> Placocryod', '> Placohumod', '> Plagganthrept', '> Plaggept', '> Plinthaqualf', '> Plinthaquept', '> Plinthaquox', '> Plinthaquult', '> Plinthohumult', '> Plinthoxeralf', '> Plinthudult', '> Plinthustalf', '> Plinthustult', '> Psammorthel', '> Psammoturbel', '> Rhodustult', '> Salaquert', '> Salicryid', '> Salustert', '> Sapristel', '> Sombrihumox', '> Sombrihumult', '> Sombriorthox', '> Sombriperox', '> Sombritropept', '> Sombriudox', '> Sombriustox', '> Sulfaquept', '> Sulfochrept', '> Sulfohemist', '> Sulfosaprist', '> Sulfudept', '> Torrert', '> Torrox', '> Tropaqualf', '> Tropaquent', '> Tropaquept', '> Tropaquod', '> Tropaquult', '> Tropofibrist', '> Tropofluvent', '> Tropofolist', '> Tropohemist', '> Tropohumod', '> Tropohumult', '> Tropopsamment', '> Troporthent', '> Troporthod', '> Troposaprist', '> Tropudalf', '> Tropudult', '> Umbraqualf', '> Umbraquox', '> Umbriorthox', '> Umbriturbel', '> Umbrorthel', '> Ustropept', '> Vermaquept', '> Vermiboroll', '> Vermustoll'],
+    'Soil type USDA qualifier': ['Acroperox', 'Acrudox', 'Acrustox', 'Alaquods', 'Albaqualfs', 'Albaquults', 'Alorthods', 'Aquicambids', 'Aquisalids', 'Aquiturbels', 'Aquorthels', 'Argialbolls', 'Argiaquolls', 'Argiborolls', 'Argicryids', 'Argicryolls', 'Argidurids', 'Argigypsids', 'Argiudolls', 'Argiustolls', 'Argixerolls', 'Borohemists', 'Borosaprists', 'Calciaquerts', 'Calciaquolls', 'Calciargids', 'Calciborolls', 'Calcicryepts', 'Calcicryids', 'Calcicryolls', 'Calcigypsids', 'Calciorthids', 'Calcitorrerts', 'Calciudolls', 'Calciustepts', 'Calciusterts', 'Calciustolls', 'Calcixerepts', 'Calcixererts', 'Calcixerolls', 'Camborthids', 'Cryaqualfs', 'Cryaquands', 'Cryaquents', 'Cryaquepts', 'Cryaquods', 'Cryaquolls', 'Cryoboralfs', 'Cryoborolls', 'Cryochrepts', 'Cryofibrists', 'Cryofluvents', 'Cryofolists', 'Cryohemists', 'Cryopsamments', 'Cryorthents', 'Cryorthods', 'Cryosaprists', 'Cryrendolls', 'Duraquands', 'Duraquerts', 'Duraquods', 'Duraquolls', 'Duricryands', 'Duricryods', 'Duricryolls', 'Durihumods', 'Duritorrands', 'Durixeralfs', 'Durixerepts', 'Durixererts', 'Durixerolls', 'Durorthids', 'Durorthods', 'Durudands', 'Durudepts', 'Durustands', 'Durustepts', 'Durustolls', 'Dystrandepts', 'Dystraquerts', 'Dystrochrepts', 'Dystrocryepts', 'Dystrogelepts', 'Dystropepts', 'Dystroxerepts', 'Dystrudepts', 'Dystruderts', 'Dystrustepts', 'Endoaqualfs', 'Endoaquands', 'Endoaquents', 'Endoaquepts', 'Endoaquerts', 'Endoaquods', 'Endoaquolls', 'Endoaquults', 'Epiaqualfs', 'Epiaquands', 'Epiaquents', 'Epiaquepts', 'Epiaquerts', 'Epiaquods', 'Epiaquolls', 'Epiaquults', 'Eutroboralfs', 'Eutrochrepts', 'Eutrogelepts', 'Eutroperox', 'Eutrotorrox', 'Eutrudepts', 'Eutrustox', 'Fibristels', 'Fluvaquents', 'Fluviwassents', 'Folistels', 'Fragiaqualfs', 'Fragiaquepts', 'Fragiaquods', 'Fragiaquults', 'Fragiboralfs', 'Fragiochrepts', 'Fragiorthods', 'Fragiudalfs', 'Fragiudepts', 'Fragiudults', 'Fragixeralfs', 'Fragixerepts', 'Fraglossudalfs', 'Frasiwassents', 'Frasiwassists', 'Fulvicryands', 'Fulvudands', 'Gelaquepts', 'Gelifluvents', 'Gelorthents', 'Glossaqualfs', 'Glossoboralfs', 'Glossocryalfs', 'Glossudalfs', 'Gypsiargids', 'Gypsiorthids', 'Gypsitorrerts', 'Gypsiusterts', 'Halaquepts', 'Haplaquents', 'Haplaquepts', 'Haplaquolls', 'Haplaquox', 'Haplargids', 'Haploborolls', 'Haplocalcids', 'Haplocambids', 'Haplocryalfs', 'Haplocryands', 'Haplocryepts', 'Haplocryerts', 'Haplocryods', 'Haplocryolls', 'Haplodurids', 'Haplofibrists', 'Haplogelepts', 'Haplogelods', 'Haplogelolls', 'Haplogypsids', 'Haplohemists', 'Haplohumods', 'Haplohumults', 'Haploperox', 'Haplorthels', 'Haplorthods', 'Haplosalids', 'Haplosaprists', 'Haplotorrands', 'Haplotorrerts', 'Haplotorrox', 'Haploturbels', 'Haplowassents', 'Haploxeralfs', 'Haploxerands', 'Haploxerepts', 'Haploxererts', 'Haploxerolls', 'Haploxerults', 'Hapludalfs', 'Hapludands', 'Hapluderts', 'Hapludolls', 'Hapludox', 'Hapludults', 'Haplumbrepts', 'Haplustalfs', 'Haplustands', 'Haplustepts', 'Haplusterts', 'Haplustolls', 'Haplustox', 'Haplustults', 'Haprendolls', 'Hemistels', 'Historthels', 'Histoturbels', 'Humaquepts', 'Humicryepts', 'Humicryerts', 'Humicryods', 'Humigelepts', 'Humixerepts', 'Humudepts', 'Humustepts', 'Hydraquents', 'Hydrowassents', 'Hydrudands', 'Kandihumults', 'Kandiperox', 'Kandiudox', 'Kandiudults', 'Kandiustox', 'Kanhaplohumults', 'Kanhapludalfs', 'Kanhapludults', 'Medifibrists', 'Medihemists', 'Medisaprists', 'Melanaquands', 'Melanocryands', 'Melanoxerands', 'Melanudands', 'Natraqualfs', 'Natraquerts', 'Natraquolls', 'Natrargids', 'Natriborolls', 'Natricryolls', 'Natridurids', 'Natrigypsids', 'Natrixeralfs', 'Natrixerolls', 'Natrudalfs', 'Natrudolls', 'Natrustalfs', 'Natrustolls', 'Ochraqualfs', 'Ochraquults', 'Paleaquults', 'Paleargids', 'Paleborolls', 'Palecryalfs', 'Palecryolls', 'Palehumults', 'Paleorthids', 'Paleudalfs', 'Paleudolls', 'Paleudults', 'Paleustalfs', 'Paleustolls', 'Palexeralfs', 'Palexerolls', 'Palexerults', 'Petraquepts', 'Petroargids', 'Petrocalcids', 'Petrocambids', 'Petrocryids', 'Petrogypsids', 'Placaquands', 'Placorthods', 'Placudands', 'Psammaquents', 'Psammowassents', 'Quartzipsamments', 'Rendolls', 'Rhodoxeralfs', 'Rhodudalfs', 'Rhodudults', 'Rhodustalfs', 'Salitorrerts', 'Salorthids', 'Sideraquods', 'Sphagnofibrists', 'Sulfaquents', 'Sulfihemists', 'Sulfisaprists', 'Sulfiwassents', 'Sulfiwassists', 'Torriarents', 'Torrifluvents', 'Torrifolists', 'Torriorthents', 'Torripsamments', 'Udarents', 'Udifluvents', 'Udifolists', 'Udipsamments', 'Udivitrands', 'Udorthents', 'Umbraquults', 'Ustarents', 'Ustifluvents', 'Ustifolists', 'Ustipsamments', 'Ustivitrands', 'Ustochrepts', 'Ustorthents', 'Vermaqualfs', 'Vermudolls', 'Vitrandepts', 'Vitraquands', 'Vitricryands', 'Vitritorrands', 'Vitrixerands', 'Xerarents', 'Xerochrepts', 'Xerofluvents', 'Xeropsamments', 'Xerorthents', 'Xerumbrepts'],
+    'Treatments': ['all treatments'],
+    'Land use': ['Agricultural areas', '> Arable land', '>> Non-irrigated arable land', '>> Permanently irrigated land', '>> Rice fields', '> Permanent crops', '>> Vineyard', '>> Fruit trees', '>> Berry plantation', '>> Olive grove', '> Pastures', '> Fallows', '> Heterogeneous agricultural areas', '>> Annual crops associated with permanent crops', '>> Complex cultivation patterns', '>> Land principally occupied by agriculture, with significant areas of natural vegetation', '>> Agro-forestry areas'],
+    'Crop rotation': ['No rotation', 'Crop rotation'],
+    'Rotation year': ['no rotation', 'year1', 'year2', 'year3', 'year4', 'year5', 'year6'],
+    'Rotation': ['no rotation', 'all years', 'year1', 'year2', 'year3', 'year4', 'year5', 'year6'],
+    'Crop type': ['Main crop', 'Cover crop', 'Fallow'],
+    'Cropping system': ['Monoculture', 'Intercropping', '> Mixture intercropping', '> Row / Strip intercropping', '> Undersown', 'Agroforestry', '> Alley cropping', '> Hedgerows / Shelterbelts', '> Silvopasture', 'Permanent cropping'],
+    'Crop': ['Grasses', '> Panicum virgatum/Switchgrass', '> Miscanthus/Silvergrass', '> Poa/Bluegrass', '> Alopecurus pratensis/Meadow foxtail', '> Arrhenatherum elatius/False oat-grass', '> Trisetum/Oat Grass', '> Festuca/Fescue grass', '> Agrostis/Bentgrass', '> Agropyron repens/Quitch', '> Bromus/Bromegrass', '> Phleum/Timothy', '> Urochloa brizantha/Palisade grass', '> Brachiaria ruziziensis/Ruzigrass', '> Lolium/Ryegrass', 'Trees', '> Betula/Birch', '> Fagus/Beech', '> Quercus/Oak', '> Acer/Maple', '> Alnus/Alder', '> Ash', '> Carpinus/Hornbeam', '> Corylus/Hazelnut tree', '> Picea/Spruce', '> Pinus/Pine', '> Abies/Fir', '> Larix/Larch', '> Tilia/Basswood', '> Populus/Poplar', '> Robinia/Locust', '> Salix/Willow', '> Crataegus/Hawthorn', '> Ulmus/Elm', '> Juniperus', '> Prunus spinosa/Blackthorn/Sloe', '> Sorbus/Mountain ash', '> Yew', '> Pseudotsuga/Douglas fir', '> Cornus/Dogwood', '> Ilex/Holly', 'Main crop', '> Abaca/Manila hemp/Musa textilis', '> Abiu/Pouteria caimito', '> Agarita/Mahonia trifoliolata', '> Agave sp.', '> Aleurites moluccana', '> Almond/Prunus dulcis', '> Anise/Pimpinella anisum', '> Apple tree/Malus domestica', '> Apricot tree/Prunus armeniaca', '> Areca palm/Areca catechu', '> Arracacha/Arracacia xanthorrhiza', '> Arrowroot/Maranta arundinacea', '> Artichoke/Cynara cardunculus var. scolymus', '> Asparagus/Asparagus officinalis', '> Avocado/Persea americana', '> Azarole/Crataegus azarolus', '> Babaco/Vasconcellea Ã— heilbornii', '> Bacuri/Platonia insignis', '> Badian/Star anise/Illicium verum', '> Bamboo shoot/Phyllostachys edulis', '> Bamboo shoot/Phyllostachys bambusoides', '> Bamboo shoot/Dendrocalamus latiflorus', '> Bamboo shoot/Bambusa oldhamii', '> Bamboo shoot/Bambusa odashimae', '> Bamboo shoot/Fargesia spathacea', '> Bamboo shoot/Bambusa blumeana', '> Banana/Musa', '> Barley/Hordeum vulgare', '>> Spring barley', '>> Winter barley', '> Bay leaves/Laurus nobilis', '> Beets/Chards/Beta vulgaris subsp. vulgaris', '> Bergamot/Monarda didyma', '> Bergamot Orange/Citrus bergamia', '> Bilberry/Amelanchier canadensis', '> Blackberry/Rubus sp.', '> Blueberries/Vaccinium sp.', '> Bowstring hemp/Dracaena trifasciata', '> Brazil nuts/Bertholletia excelsa', '> Breadfruit/Artocarpus altilis', '> Broccoli/Brassica oleracea var. italica', '> Brussels sprouts/Brassica oleracea var. gemmifera', '> Buckwheat/Fagopyrum esculentum', '> Butter-nut/Sawarri-nut/Caryocar nuciferum', '> Cabbage turnip/Brassica oleracea var. gongylodes', '> Canahua/Chenopodium pallidicaule', '> Canary grass/Phalaris canariensis', '> Caper bush/Capparis spinosa', '> Carambola/Averrhoa carambola', '> Carapa sp.', '> Cardamom/Elettaria sp.', '> Cardamom/Amomum sp.', '> Cardoon/Cynara cardunculus', '> Caroa/Neoglaziovia variegata', '> Carrot/Daucus carota subsp. sativus', '> Cashew/Anacardium occidentale', '> Cassava/Manioc/Manihot esculenta', '> Castor oil plant/Ricinus communis', '> Cauliflower/Brassica oleracea var. botrytis', '> Celeriac/Apium graveolens var. rapaceum', '> Celery/Apium graveolens var. graveolens', '> Cherimoya/Custard apple/Annona cherimola', '> Chervil/Anthriscus cerefolium', '> American chestnut/Castanea dentata', '> American chinkapin/Castanea pumila', "> Seguin's chestnut/Castanea seguinii", '> Chinese chestnut/Castanea mollissima', '> Chinese chinkapin/Castanea henryi', '> Japanese chestnut/Castanea crenata', '> European chestnut/Castanea sativa', '> Chicory/Cichorium intybus', '> Chicory roots/Cichorium intybus var. sativum', '> Chili pepper/Capsicum annuum', '> Chili pepper/Capsicum chinense', '> Chili pepper/Capsicum frutescens', '> Chinese cabbage/Brassica rapa', '> Chinese onion/Allium chinense', '> Chinese white olive/Canarium album', '> Chinotto orange/Citrus myrtifolia', '> Chives/Allium schoenoprasum', '> Chufa/Cyperus esculentus', '> Cinnamon/Cinnamomum sp.', '> Citron/Citrus medica', '> Clementine/Citrus Ã— clementina', '> Clove/Syzygium aromaticum', '> Cacao tree/Cocoa/Theobroma cacao', '> Coast beard-heath/Leucopogon parviflorus', '> Coconut tree/Cocos nucifera', '> Cocoyam/Taro/Colocasia esculenta', '> Cocoyam/Malanga/Xanthosoma sp.', '> Coffee plant/Coffea sp.', '>> Coffee plant/Coffea arabica', '>> Coffee plant/Coffea canephora', '> Coir/Coconut fibre/Cocos nucifera', '> Collard/Brassica oleracea var. acephala', '> Conkerberry/Carissa spinarum', '> Coriander/Coriandrum sativum', '> Cranberry/Vaccinium subg. Oxycoccus', '> Land cress/Barbarea verna', '> Garden cress/Lepidium sativum', '> Watercress/Nasturtium officinale', '> Croton tiglium', '> Cucumber/Cucumis sativus', '> Currant/Ribes sp.', '>> Mountain currant/Ribes alpinum', '>> Northern black currant/Ribes hudsonianum', '>> Skunk currant/Ribes glandulosum', '>> Wax currant/Ribes cereum', '>> Blackcurrant/Ribes nigrum', '>> Golden currant/Ribes aureum', '>> Alpine prickly currant/Ribes montigenum', '>> Northern redurrant/Ribes triste', '>> Flowering currant/Ribes sanguineum', '>> Redcurrant/Ribes rubrum', '>> Sierra currant/Ribes nevadense', '> Dangleberry/Gaylussacia sp.', '> Date palm/Phoenix dactylifera', '> Dill/Anethum graveolens', '> Durian/Durio sp.', '> Durum wheat/Triticum durum', '>> Spring durum wheat', '>> Winter durum wheat', '> Eggplant/Aubergine/Solanum melongena', '> Einkorn wheat/Triticum monococcum', '> Elderberry/Sambucus sp.', '> Emmer wheat/Triticum dicoccon', '> Feijoa/Acca sellowiana', '> Fennel/Foeniculum vulgare', '> Fenugreek/Trigonella foenum-graecum', '> Figs/Ficus sp.', '> Flax/Linseed/Linum usitatissimum', '> Fuque fibre/Furcraea macrophylla', '> Garlic/Allium sativum', '> Ginger/Zingiber officinale', '> Gooseberry/Ribes sp.', '>> Wild gooseberry/Ribes hirtellum', '>> Ribes divaricatum', '>> Canadian gooseberry/Ribes oxyacanthoides', '>> Gummy gooseberry/Ribes lobbii', '>> Black swamp gooseberry/Ribes lacustre', '>> European gooseberry/Ribes uva-crispa', '>> Fuchsia-flowered gooseberry/Ribes speciosum', '>> Whitestem gooseberry/Ribes inerme', '> Gourd/Cucurbita sp.', '> Gourd/Lagenaria sp.', '> Grapefruit/Citrus Ã— paradisi', '> Grape/Vitis vinifera', '> Grape/Vitis amurensis', '> Grape/Vitis labrusca', '> Grape/Vitis mustangensis', '> Grape/Vitis riparia', '> Grape/Vitis rotundifolia', '> Guava', '>> Common Guava/Psidium guajava', '>> Pineapple Guava/Acca sellowiana', '>> Cattley Guava/Psidium cattleyanum', '>> Costa Rican Guava/Psidium friedrichsthalianum', '>> Brazilian Guava/Psidium guineense', '>> Purple Guava/Psidium rufum', '>> Chilean Guava/Ugni molinae', '> Guavaberry/Myrciaria floribunda', '> Halfah/Esparto grass/Stipa tenacissima', '> Halfah/Esparto grass/Lygeum spartum', '> Hemp/Cannabis sativa', '> Hog plum/Yellow mombin/Spondias mombin', '> Hop/Humulus lupulus', '> Horseradish/Armoracia rusticana', '> Huckleberry/Gaylussacia sp.', '> Huckleberry/Vaccinium sp.', '> Jackfruit/Artocarpus heterophyllus', '> Jatropha curcas', '> Jerusalem artichoke/Topinambur/Helianthus tuberosus', '> Jicama/Pachyrhizus erosus', '> Jocote/Red mombin/Spondias purpurea', '> Jojoba/Simmondsia chinensis', '> Jostaberry/Ribes Ã— nidigrolaria', '> Jujube/Ziziphus jujuba', '> Jute/Corchorus sp.', '>> White jute/Corchorus capsularis', '>> Tossa jute/Corchorus olitorius', '> Kale/Leaf cabbage/Brassica oleracea var. acephala', '> Kapok/Ceiba pentandra', '> Khorasan wheat/Triticum turanicum', '> Kiwifruit/Actinidia sp.', '> Kola tree/Cola acuminata', '> Kola tree/Cola nitida', '> Kumquat/Citrus japonica', '> Leaf celery/Apium graveolens var. secalinum', '> Leek/Allium ampeloprasum', '> Legumes/Pulse', '>> Adzuki bean/Vigna angularis', '>> Alfalfa/Lucerne/Medicago sativa', '>> Bambara bean/Vigna subterranea', '>> Broad bean/Faba bean/Vicia faba var. major', '>> Carob/Ceratonia siliqua', '>> Chickpea/Cicer arietinum', '>> Clover/Trifolium sp.', '>> Common bean/Phaseolus vulgaris', '>> Cowpea/Vigna unguiculata', '>> Field bean/Vicia faba var. minor', '>> Groundnut/Peanut/Arachis hypogaea', '>> Guar bean/Cyamopsis tetragonoloba', '>> Horse bean/Vicia faba var. equina', '>> Hyacinth bean/Lablab purpureus', '>> Indian pea/Lathyrus sativus', '>> Jack bean/Canavalia ensiformis', '>> Lentil/Lens culinaris', '>> Lima bean/Phaseolus lunatus', '>> Lupin/Lupinus sp.', '>> Lupini bean/Lupinus albus', '>> Mesquite/Prosopis sp.', '>> Moth bean/Vigna aconitifolia', '>> Mung bean/Vigna radiata', '>> Pea/Pisum sativum', '>> Pigeon pea/Cajanus cajan', '>> Rice bean/Vigna umbellata', '>> Runner bean/Phaseolus coccineus', '>> Scimitar bean/Canavalia gladiata', '>> Soybean/Glycine max', '>> Tamarind/Tamarindus indica', '>> Tepary bean/Phaseolus acutifolius', '>> Urad/Mungo bean/Vigna mungo', '>> Velvet bean/Mucuna pruriens', '>> Vetch/Vicia sp.', '>> Winged bean/Psophocarpus tetragonolobus', '>> Yam bean/Pachyrhizus erosus', '> Lemon/Citrus limon', '> Lime', '>> Kaffir lime/Citrus hystix', '>> Key lime/Citrus Ã— aurantiifolia', '>> Persian lime/Citrus Ã— latifolia', '> Lettuce/Lactuca sativa', '> Loganberry/Rubus Ã— loganobaccus', '> Longan/Dimocarpus longan', '> Loquat/Eriobotrya japonica', '> Lychee/Litchi chinensis', '> Macadamia integrifolia', '> Macadamia jansenii', '> Macadamia ternifolia', '> Macadamia tetraphylla', '> Mahua/Madhuca longifolia/Bassia latifolia', '> Maize/Corn/Zea mays', '> Mammee/Mammea americana', '> Mandarin orange/Citrus reticulata', '> Mango/Mangifera indica', '> Mangosteen/Garcinia mangostana', '> Marjoram/Origanum majorana', '> Mashua/Tropaeolum tuberosum', '> Mauritius hemp/Furcraea foetida', '> Medlar/Mespilus germanica', '> Melon', '>> Winter melon/Benincasa hispida', '>> Egusi/Citrullus lanatus', '>> Watermelon/Citrullus lanatu', '>> Horned melon/Cucumis metuliferus', '>> Muskmelon/Cucumis melo', '> Millet', ">> Adlay millet/Job's tears/Coix lacryma-jobi", '>> Barnyard millet/Japanese millet/Echinochloa sp.', '>> Black fonio/Digitaria iburua', '>> Browntop millet/Urochloa ramosa', '>> Common millet/Proso millet/Panicum miliaceum', '>> Finger millet/Ragi/Eleusine coracana', '>> Foxtail millet/Setaria italica', '>> Guinea millet/Brachiaria deflexa', '>> Kodo millet/Paspalum scrobiculatum', '>> Little millet/Panicum sumatrense', '>> Pearl millet/Sajjey/Pennisetum glaucum', '>> Polish millet/Digitaria sanguinalis', '>> Raishan/Digitaria compacta', '>> Sorghum/Great millet/Sorghum bicolor', '>> Teff/Eragrostis tef', '>> White fonio/Digitaria exilis', '> Mountain papaya/Vasconcellea pubescens', '> Mulberrry', '>> White mulberry/Morus alba', '>> Chinese mulberry/Morus australis', '>> Morus cathayana', '>> Morus indica', '>> Morus insignis', '>> Morus japonica', '>> Morus liboensis', '>> Long mulberry/Morus macroura', '>> African mulberry/Morus mesozygia', '>> Morus mongolica', '>> Texas mulberry/Morus celtidifolia', '>> Black mulberry/Morus nigra', '>> Morus notabilis', '>> Red mulberry/Morus rubra', '>> Morus serrata', '>> Morus trilobata', '>> Morus wittiorum', '> Mustard', '>> Black mustard/Brassica nigra', '>> Mustard cabbage/Brown indian mustard/Brassica juncea', '>> White mustard/Yellow mustard/Sinapis alba', '> Common Myrtle/Myrtus communis', '> Saharan Myrtle/Myrtus nivellei', '> Naranjilla/Solanum quitoense', '> Nectarine/Prunus persica var. nucipersica', '> New Zealand flax/Phormium colensoi', '> New Zealand flax/Phormium tenax', '> Noog/Nug/Guizotia abyssinica', '> Nutmeg/Mace/Myristica fragrans', '> Oat/Avena sativa', '> Oca/Oxalis tuberosa', '> Oil palm/Elaeis guineensis', '> Oiticica/Licania rigida', '> Okra/Abelmoschus esculentus', '> Olive/Olea europaea', '> Onion/Allium cepa', '> Sweet Orange/Citrus Ã— sinensis', '> Oyster plant/Tragopogon porrifolius ', '> Pak-Choi/Brassica rapa subsp. chinensis', '> Palma Ixtle/Samuela carnerosana/Yucca carnerosana', '> Papaya/Carica papaya', '> Parsley/Petroselinum crispum', '> Parsnip/Pastinaca sativa', '> Passion fruit/Maracuja/Passiflora edulis', '> Pawpaw/Asimina triloba', '> Peach/Prunus persica', '> Pear/Pyrus sp.', '> Pecan/Carya illinoinensis', '> Pepper/Piper sp.', '> Peppermint/Mentha Ã— piperita', '> Pepper/Capsicum sp.', '> Perilla frutescens', '> Persimmon/Diospyros sp.', '>> Date-plum/Diospyros lotus', '>> American persimmon/Diospyros virginiana ', '>> Asian persimmon/Diospyros kaki', '>> Black sapote/Diospyros nigra', '>> Mabolo/Diospyros discolor', '>> Indian persimmon/Diospyros peregrina', '>> Texas persimmon/Diospyros texana', '> Phacelia sp.', '> Pili/Canarium ovatum', '> Pineapple/Ananas comosus', '> Pistachio/Pistacia vera', '> Plantain/Musa paradisiaca', '> Plum/Prunus sp.', '>> Damson plum/Prunus domestica subsp. insititia', '>> Gage/Prunus domestica subsp. italica', '>> Mirabelle plum/Prunus domestica subsp. syriaca', '>> Victoria plum/Prunus domestica subsp. intermedia', '> Pomegranate/Punica granatum', '> Pomelo', '> Pongamia glabra/Millettia pinnata', '> Poppy/Papaver somniferum', '> Potato/Solanum tuberosum', '> Prickly pear/Opuntia ficus-indica', '> Pumpkin/Cucurbita sp.', '> Pyrethrum/Chrysanthemum coccineum', '> Quihuicha/Amaranthus caudatus ', '> Quinces/Cydonia oblonga', '> Quinoa/Chenopodium quinoa', '> Radish/Raphanus sp.', '>> Black radish/Raphanus sativus var. niger', '>> Daikon/White radish/Raphanus raphanistrum subsp. sativus', '>> Green radish/Raphanus sativus var. caudatus', '>> Oilseed radish/Raphanus sativus var. oleiformis', '>> Red radish/Raphanus raphanistrum subsp. sativus', '>> Wild radish/Raphanus sativus var. raphanistroides', '> Rambutan/Nephelium lappaceum', '> Ramie/Boehmeria nivea', '> Rapeseed/Brassica napus subsp. napus', '> Raspberry/Rubus sp.', '>> Asian raspberry/Rubus crataegifolius', '>> Tasmanian alpine raspberry/Rubus gunnianus', '>> European red raspberry/Rubus idaeus', '>> Whitebark raspberry/Rubus leucodermis', '>> Black raspberry/Rubus occidentalis', '>> Australian native raspberry/Rubus parvifolius', '>> Wine raspberry/Rubus phoenicolasius', '>> Mauritius raspberry/Rubus rosifolius', '>> American red raspberry/Rubus strigosus', '>> Yellow Himalayan raspberry/Rubus ellipticus', '>> Boulder raspberry/Rubus deliciosus', '>> Flowering raspberry/Rubus odoratus', '>> Snow raspberry/Rubus nivalis', '>> Arctic raspberry/Rubus arcticus', '>> Molucca raspberry/Rubus sieboldii', '> Rhubarb/Rheum Ã— hybridum', '> Rice', '>> African rice/Oryza glaberrima', '>> Asian rice/Oryza sativa', '> Rose/Rosa sp.', '> Rowanberry/Sorbus aucuparia', '> Rubber plants', '>> Congo rubber/Landolphia owariensis', '>> Amazonian rubber tree/Hevea brasiliensis', '>> Rubber fig/Ficus elastica', '>> Panama rubber tree/Castilla elastica', '>> Common dandelion/Taraxacum officinale', '>> Russian dandelion/Taraxacum kok-saghyz', '>> Guayule/Parthenium argentatum', '>> Palaquium gutta', '>> Scorzonera tau-saghyz', '> Rutabaga/Swede/Brassica napus subsp. napobrassica', '> Rye/Secale cereale', '>> Spring rye', '>> Fall rye', '>> Winter rye', '> Safflower/Carthamus tinctorius', '> Saffron/Crocus sativus', '> Sapote', '>> Sapodilla/Manilkara zapota', '>> White sapote/Casimiroa edulis', '>> Chupa-chupa/Quararibea cordata', '>> Canistel/Pouteria campechiana', '>> Green sapote/Pouteria viridis', '>> Mamey sapote/Pouteria sapota', '> Sapucaia nut/Lecythis zabucajo', '> Satsuma/Citrus unshiu', '> Savory', '>> Summer savory/Satureja hortensis', '>> Winter savory/Satureja montana', '>> Crete savory/Satureja thymbra', '> Savoy cabbage/Brassica oleracea var. sabauda', '> Scallion/Allium cepa var. cepa', '> Scorzonera sp.', '>> Black salsify/Scorzonera hispanica', ">> Viper's-grass/Scorzonera humilis", '>> Lebanese salsify/Scorzonera libanotica', '> Cotton plant/Gossypium sp.', '> Service tree/Sorbus domestica', '> Sesame/Sesamum indicum', '> Shea tree/Karite/Vitellaria paradoxa', '> Shorea robusta', '> Sisal/Agave sisalana', '> Sorrel/Rumex acetosa', '> Sour cherry/Prunus cerasus', '> Spelt/Triticum spelta', '> Spinach/Spinacia oleracea', '> Star apple/Chrysophyllum cainito', '> Strawberry', '>> Garden strawberry/Fragaria Ã— ananassa', '>> Fragaria vesca', '>> Fragaria virginiana', '>> Fragaria chiloensis', '>> Fragaria moschata', '>> Fragaria viridis', '> Strawberry tree/Arbutus unedo', '> Sugar beet/Beta vulgaris subsp. vulgaris', '> Sugar cane/Saccharum officinarum', '> Sugar maple/Acer saccharum', '> Sugar palms', '>> Sugar palm/Arenga pinnata', '>> Doub palm/Borassus flabellifer', '>> Kitul palm/Caryota urens', '> Sunflower/Helianthus sp.', '> Sweet cherry/Prunus avium', '> Sweet potato/Ipomoea batatas', '> Tallowtree/Chinese tallow/Triadica sebifera', '> Tangerine/Mandarin/Citrus reticulata', '> Tea/Camellia sinensis', '> Teff/Eragrostis tef', '> Thyme/Thymus sp.', '> Tobacco/Nicotiana sp.', '> Tomato/Solanum lycopersicum', '> Triticale/Ã— Triticosecale', '> True sago palm/Metroxylon sagu', '> Tung tree/Vernicia fordii', '> Turmeric/Curcuma longa', '> Turnip/Brassica rapa subsp. rapa', '> Ullucus tuberosus', '> Vanilla sp.', '> Velvet tree/Miconia calvescens', '> Walnut/Juglans sp.', '>> Juglans regia', '>> Juglans nigra', '>> Juglans cinerea', '> Watercress/Nasturtium officinale', '> Wheat/Triticum aestivum', '>> Spring wheat', '>> Winter wheat', '> Yam', '>> Dioscorea rotundata', '>> Dioscorea cayennensis', '>> Dioscorea alata', '>> Dioscorea polystachya', '>> Dioscorea bulbifera', '>> Dioscorea esculenta', '>> Dioscorea dumetorum', '>> Dioscorea trifida', '>> Dioscorea hirtiflora subsp. pedicellata', '>> Dioscorea japonica', '> Yerba Mate/Ilex paraguariensis'],
+    'Harvesting/Termination method': ['No harvesting', 'Mowing', 'Common harvesting method for that crop', 'Vegetation termination', '> Mechanical termination', '>> Roller-crimper', '>> Clapping', '> Frost-killed', '> Chemical termination', 'Wood harvest', 'Fruit harvest'],
+    'Residues removal': ['No residue removal', 'Partial residue removal', 'Full residue removal'],
+    'Residues incorporation': ['Residue left on the surface', 'Residue incorporation'],
+    'yesNo': ['yes', 'no'],
+    'Tillage system': ['Zero tillage', 'Inversion tillage', 'Non-inversion tillage'],
+    'Tillage method': ['No tillage method', 'Moldboard plowing', 'Chisel plowing', 'Disc plowing', 'Harrowing', 'Subsoiling', 'Scarification', 'Cultivator', 'Rotary tilling'],
+    'Permanent soil area covered by residues or crops': ['< 30%', '> 30%'],
+    'Season': ['Spring', 'Summer', 'Autumn', 'Winter'],
+    'Type of fertilizer/amendment': ['No fertilizer/amendment', 'Organic amendment', '> Liquid manure', '>> Cattle slurry', '>> Pig slurry', '>> Liquid fraction (manure)', '> Solid manure', '>> Farmyard manure', '>> Poultry litter', '>> Composted manure', '>> Solid fraction (manure)', '> Plant residue amendment', '> Compost', '>> Farm compost', '>> Green waste compost', '>> Fruit, vegetables, garden waste compost', '>> Municipal solid waste compost', '>> Sewage sludge compost', '>> Biochar blended compost', '> Woord residues', '>> Wood sawdust', '>> Wood chips', '> Biochar', '> Sewage sludge', '> Effluent', '> (Raw) Digestate', '>> Solid fraction (digestate)', '>> Dried digestate', '>> Lliquid fraction (digestate)', '>> Digestate effluent', 'Inorganic fertilizer', '> Nitrogen fertilizer', '>> Ammonia fertilizer', '>> Ammonium nitrate fertilizer', '>> Urea fertilizer', '>> Calcium ammonium nitrate fertilizer', '> Phosphate fertilizer', '>> Superphosphate fertilizer', '>> Phosphogypsum fertilizer', '>> Triple superphosphate fertilizer', '>> Double superphosphate fertilizer', '>> Hyperphosphate fertilizer', '> Potassium fertilizer', '>> Potassium chloride fertilizer', '>> Potassium sulfate fertilizer', '>> Magnesia', '> Compound fertilizer', '>> NPK fertilizer', '>> Nitrogen phosphorus fertilizer', '>> Nitrogen potassium fertilizer', '>> Phosphorus potassium fertilizer', '>> Potassium magnesium sulfate fertilizer', '> Sulphur fertilizer', '> Silicate fertilizer', 'Liming material', '> Calcitic lime', '> Dolomitic lime', '> No liming material'],
+    'Units': ['kg.ha-1.year-1', 'm3.ha-1.year-1'],
+    'Fertilizer/Amendment application method': ['Broadcast fertilization', 'Foliar application', 'Fertigation', 'Localized placement', '> Band placement', '> Fertilizer drilling', '> Sidedressing', '> Pellet application', 'Deep placement', 'Surface amendment', 'Amendment incorporation', 'No amendment application'],
+    'Irrigation method': ['No irrigation', 'Drip irrigation', 'Flood / Furrow irrigation', 'Sprinkler irrigation'],
+    'Irrigation water': ['Wastewater irrigation', 'Clear water irrigation', 'Desalted water irrigation'],
+    'Drainage system': ['Surface drainage', 'Subsurface drainage', 'No drainage'],
+    'Analysis method': ['Dry combustion method', '> Dry combustion method (Nelson and Sommers, 1986)', '> Dry combustion method (Chichester and Chaison, 1992)', '> Dry combustion (ISO 10694:1995)', 'Wet chemical oxidation', '> Walkley and Black (1934)', '> Modified Walkley and Black method (Meibus, 1960)', '> Modified Meibus method (Nelson and Sommers, 1982)', '> Dichromate oxidation (Kalembasa and Jenkinson, 1973)', '> Springer-Klee method (ISO 14235:1998) ', '> Tube digestion method (Sparks, 1996)', '> Tjurin method (Orlov and Grishina 1981)', '> Tinsley (1950)', '> Heanes (1984) - photometric determination', 'Gravimetric method - loss on ignition (LOI)', '> Ball (1964)', '> Miyazawa et al. (2000)'],
+    'Bulk density method': ['Measured', 'Estimated (PTF)'],
+    'pH method': ['water', 'KCl', 'CaCl2'],
+    'Harvested yield water content': ['Fresh matter', 'Dry matter', '80% dry matter (DM80)', 'Moisture% (provide number)'],
+    'Measurement': ['--- Chemistry ---', 'Carbon compounds', '> Total Carbon', '>> Total inorganic Carbon', '>>> Carbonates', '>>>> CaCO3/Calcium Carbonate', '>> Total organic Carbon', '>> Extractable Carbon', '>>> Water-extractable Carbon/Water-soluble Carbon', '>> Carbon mineralization', '>>> Potentially mineralizable Carbon', '> Soil organic matter', '>> Active/labile organic matter', '>>> Free particulate organic matter', '>>>> Light fraction (density)', '>>>> Macro-organic matter fraction (size)', '>> Intermediate/passive/stable organic matter', '>>> Dissolved organic matter/DOM', '>>>> Dissolved organic carbon/DOC', '>>>> Reducing sugars', '>>>> Amino acids', '>>>> Aromaticity/Optical density (280nm)', '>>> Aggregate-protected organic matter', '>>>> Occluded particulate organic matter', '>>>> Microaggregates', '>>> Mineral-associated organic matter/MAOM', '>>>> Heavy fraction MAOM (density)', '>>>> Sand-sized fraction MAOM (size)', '>>>> Silt-sized fraction MAOM (size)', '>>>> Clay-sized fraction MAOM (size)', '>>>> Fine fraction MAOM (silt + clay, size)', '>>> Chemically extracted organic matter', '>>>> Organic matter extracted by H2O2', '>>>> Organic matter extracted by NaOCl', '>>>> Organic matter extracted by KMNO4', '>>> Pyrogenic organic matter', '>> Organic matter adsorption', '>> Organic matter composition', '>>> Protein-like compounds', '>>> Fulvic-like compounds', '>>> Humic-like compounds', '>> Functional groups', '>>> Alkyl Carbon', '>>> Methoxyl and N-alkyl Carbon', '>>> O-alkyl Carbon', '>>> H-, C-substituted aromatic Carbon', '>>> O-substituted aromatic Carbon', '>>> Alkyl Carbon / O-alkyl Carbon', '>>> Total aliphatic-Carbon', '>>>> Unsubstituted alkyl-Carbon', '>>>> O- and N-substituted alkyl-Carbon', '>>> Total aromatic-Carbon', '>>>> Aryl-Carbon', '>>>> Phenolic Carbon', '>>> Total Carbonyl Carbon', '>>>> Carboxyl Carbon', '>>>> Carbonyl Carbon', '> CO2 fluxes/Carbon Dioxide fluxes', '>> Net ecosystem CO2 exchange', '>>> Photosynthesis', '>>> Ecosystem respiration', '>>>> Soil respiration', '>>>> Aboveground plant respiration', '>> Incubation assays', '>>> Soil basal respiration', '>>> Metabolic quotient (= specific respiration = qCO2)', '>>> Substrate induced respiration', '> CH4 flux/Methane flux', '>> CH4 production/Methane production', '>> CH4 oxidation/Methane oxidation', 'Nitrogen compounds', '> Total Nitrogen', '>> Total dissolved Nitrogen', '>>> Mineral Nitrogen/Inorganic Nitrogen', '>>>> NH4+/Ammonia', '>>>> NH4+/Ammonia turnover time', '>>>> NO3-/Nitrate', '>>>> NO3-/Nitrate turnover time', '>>>> NO2-/Nitrite', '>>>> NO2-/Nitrite turnover time', '>>> Dissolved organic Nitrogen', '> Gaseous Nitrogen', '>> NO/Nitric oxide', '>> N2O/Nitrous oxide', '>> N2/Nitrogen', '>> N2O:N2 ratio', '> Nitrogen mineralization', '>> Net Nitrogen mineralization rate', '>> Gross Nitrogen mineralization rate', '>> Potentially mineralizable Nitrogen', '> Nitrification', '>> Net nitrification rate', '>> Gross nitrification rate', '>> Potential nitrification', '> Denitrification', '>> Potential denitrification', '> NH3 volatilization', '> Nitrogen leaching', '> Nitrogen availability', 'Phosphorus compounds', '> Total Phosphorus', '>> Mineral Phosphorus', '>> Organic Phosphorus', '>> Phytoavailable Phosphorus/ Extractable Phosphorus', '>>> Double lactate extractable Phosphorus', '>>> Water-extractable Phosphorus', '>>> Bicarbonate-extractable Phosphorus / Olsen Phosphorus', '>>> Bray Phosphorus', '>>> Resin-extractable Phosphorus', '> Phosphorus saturation index', '> Phosphorus sorption capacity', '> Phosphorus mineralization', 'Other chemical elements', '> Total Calcium', '>> Exchangeable Ca2+', '>> Extractable Calcium', '> Total Magnesium', '>> Extractable Magnesium', '>>> Water-extractable Magnesium', '>>> CaCl2 extractable Magnesium', '>> Exchangeable Mg2+', '> Total Potassium/Total K', '>> Extractable Potassium', '>>> Double lactate extractable Potassium', '>> Exchangeable K+/Exchangeable Potassium', '> Total Sodium/Total Na', '>> Extractable Sodium/Extractable Na', '>> Exchangeable Na+', '> Total Sulfur', '>> Organic Sulfur', '>> Inorganic Sulfur', '>> SO4 2-/Sulfate', '>> Sulfur mineralization', '> Metals', '>> Total Aluminium', '>>> Al3+', '>> Total Cadmium/Cd', '>> Total Chromium/Cr', '>> Total Copper/Cu', '>> Total Iron/Fe', '>> Total Mercury/Hg', '>> Total Mangenese/Mn', '>> Total Nickel', '>> Total Lead/Pb', '>> Total Zinc/Zn', '> Total Chlorine/Cl', '> Total Boron', 'Adsorption complex', '> Cation exchange capacity', '> Effective cation exchange capacity', '> Sum of base cations', '> Base saturation', '> Aluminum saturation', '> Sodium adsorption ratio', '> H+ ion concentration', 'pH', '> pH (water)', '> pH (KCl)', '> pH (CaCl2)', 'Electrical conductivity', 'Osmotic potential', 'Redox potential', 'Soil protein content', 'C:N ratio', 'C:P ratio', 'C:N:P stoichiometry', 'C:S ratio', '--- Biology ---', 'Microorganisms', '> Bacteria', '>> Gram positive bacteria', '>> Gram negative bacteria', '>> Actinomycetes', '>> Methane-oxidizing bacteria', '>> Ammonia-oxidizing bacteria', '> Fungi', '>> Arbuscular mycorrhiza (AMF)', '>> Fungal hyphae length', '>> FDA-active fungal hyphae length', '>> Fungal hyphae volume', '> Fungi-to-bacteria ratio', '> Microbial biomass', '>> Microbial biomass Carbon', '>> Microbial biomass Nitrogen', '>> Microbial biomass Phosphorus', '> Anaerobic bacteria', '> Archaea', 'Fauna', '> Macrofauna', '>> Opiliones/Harvestmen', '>> Araneae/Spiders', '>> Isopoda/Woodlice', '>> Chilopoda/Centipedes', '>> Diplopoda/Millipedes', '>> Clitellata/Oligochaeta/Earthworms', '>> Glossoscolecidae/Earthworms', '>> Coleoptera/Beetles', '>> Diptera/Flies', '>> Hymenoptera', '>> Gastropoda/Snails/Slugs', '> Mesofauna', '>> Acari/Mites', '>>> Mesostigmata', '>>>>  Gamasida', '>>> Oribatida', '>>> Prostigmata', '>> Collembola/Springtails', '>> Protura', '>> Diplura', '>> Symphyla', '>> Enchytraeidae/Potworms', '>> Pseudoscorpiones', '> Microfauna', '>> Nematoda', '>> Protozoa', '>> Rotifera/Wheel animals', '>> Tardigrada/Water bears', 'Plants', '> Roots', '>> Root exudates', '>> Root length (density)', '>> Root volume (density)', '>> Mean root diameter', '>> Root size distribution', '>> Root dry weight', '>> Root fresh weight', '>> Root germination rate', '> Shoot germination rate', '> Litter', '>> Litter decomposition', '>> Tea bag index', '> Leaf area index (LAI)', '> Yield', '> Stand/Tree age', '> Stalk/Stem', '>> Stalk length', '>> Stalk volume', '>> Mean Stalk diameter', '>> Stalk dry weight', '>> Stalk fresh weight', '> Nutrient performance indicators', '>> Total plant tissue Nitrogen', '>> Plant Nitrogen uptake efficiency', '>> Plant Nitrogen uptake', '>>> Aboveground plant Nitrogen uptake', '>>> Grain Nitrogen uptake', '>> Plant Phosphorus uptake', '>>> Aboveground plant Phosphorus uptake', '>> Nitrogen use efficiency', '>> Phosporus use efficiency', '>> Fertilizer Nitrogen recovery efficiency', '>> Fertilizer Phosporus recovery efficiency', '> Harvest index', '> Normalized difference vegetative index (NDVI)', 'Biological metrics', '> Biomass', '>> Aboveground biomass', '>> Belowground biomass', '>> Biomass Carbon', '>> Biomass Nitrogen', '>> Biomass Phosphorus', '> Freshweight', '> Dryweight', '> Abundance', '> Presence', '> Absence', '> Reproduction rate', '> Size/Length (average)', 'Phenological stage (BBCH)', 'Biochemical activity', '> Enzyme activity', '>> Amylase', '>> Arylsulfatase', '>> Asparaginase', '>> Cellobiohydrolase', '>> Beta-cellobiosidase', '>> Cellulase', '>> Chitinase', '>> Dehydrogenase', '>> Glucosidase', '>>> Alpha-glucosidase', '>>> Beta-glucosidase', '>> Glutaminase', '>> N-acetyl-beta-glucosaminidase', '>> Invertase', '>> Peroxidase', '>> Phenol oxidase', '>> Phosphatase', '>>> Alkaline phosphatase', '>>> Acid phosphatase', '>>> Neutral phosphatase', '>> Phosphodiesterase', '>> Phosphomonoesterase', '>>> Acid phosphomonoesterase', '>>> Alkaline phosphomonoesterase', '>> Protease', '>>> BAA-protease', '>> Sulphatase', '>> Urease', '>> Xylanase', '>> Beta-xylosidase', '>> Hydrolysis of fluorescein diacetate (FDA)', '>> Exoglucanase', '>> Beta-glucosaminidase', '> Arginine ammonification', '> Catabolic response profile (CRP)', 'Diversity', '> Species diversity', '>> Species richness', '>> Shannon index', '>> Pilous evenness', '> Functional diversity', '>> Average well color development (AWCD)', '>> Functional richness', '>> Functional evenness', '> Indices of Ecosystem Condition and Function', '>> cp-groups', '>>> c-p1', '>>> c-p2', '>>> c-p3', '>>> c-p4', '>>> c-p5', '>> Maturity index (MI)', '>> Plant parasite index (PPI)', '>> PPI/MI ratio', '>> Structure index (SI)', '>> Enrichment index (EI)', 'Fatty acids', '> Lipopolysaccharide fatty acids (LPS-OHFA)', '> Phospholipid fatty acids (PLFA)', '>> Saturated fatty acids (SAFA)', '>>> Straight chain SAFA', '>>>>  C14:0', '>>>>  C15:0', '>>>>  C16:0', '>>>>  C17:0', '>>>>  C18:0', '>>> Iso-branched SAFA', '>>>>  i14:0', '>>>>  i15:0', '>>>>  i16:0', '>>>>  i17:0', '>>>>  i18:0', '>>>>  15Me16:0', '>>> Anteiso-branched SAFA', '>>>>  a14:0', '>>>>  a15:0', '>>>>  a16:0', '>>>>  a17:0', '>>>>  a18:0', '>>>>  14Me16:0', '>>>>  10Me16:0', '>>>>  10Me18:0', '>>>>  10Me19:0', '>> Monounsaturated fatty acids', '>>> 16:1Ï‰5c', '>>> 16:1Ï‰7c', '>>> 16:1Ï‰8c', '>>> 18:1Ï‰8c', '>>> 16:1Ï‰9c', '>>> 18:1Ï‰9c', '>>> 18:1Ï‰9t', '>>> 16:1Ï‰7t', '>>> 18:1Ï‰5c', '>>> 18:1Ï‰7c', '>>> 19:1Ï‰6c', '>> Polyunsaturated fatty acids', '>>> 18:2Ï‰6c', '>>> 20:2Ï‰6c', '>>> 20:3Ï‰6c', '>>> 20:4Ï‰6c', '>>> 18:3Ï‰3c', '>> Cyclopropane fatty acids', '>>> 19:0 cyclo Ï‰7c', '>>> 17:0 cyclo Ï‰7c', '>> Dimethyl acetal', '>>> 16:0 DMA', '>>> 16:1 DMA', '>>> 14:1 DMA', '> Fatty acid methyl ester (FAME)', '> Neutral lipid fatty acids (NLFA)', 'Species traits', '> Ecosystem engineer', '> Feeding strategy', '>> Generalist', '>> Specialist', '> Organism stage', '>> Adult', '>> Juveniles', '>> Larvae', '> Life form', '>> Epigeic', '>> Anecic', '>> Endogeic', '>> Hemiedaphic', '>> Epi-endogeic', '>> Euedaphic', '> Trophic groups', '>> Bacterivore', '>> Fungivore', '>> Detritivore', '>> Herbivore', '>> Predator/Carnivore', '>> Omnivore', 'Carbohydrates', '> Mannose', '> Xylose', '> Mannose:xylose ratio', 'ATP content', 'Ergosterol concentration', '--- Physics ---', 'Particles', '> Fine earth', '>> Clay content', '>>> Dispersed clay content', '>>> Non-complexed clay content', '>>> Complexed clay content', '>> Silt content', '>> Fine silt content (2-20Î¼m)', '>> Sand content', '> Rock fragments', '> Particle density', '> Colloids', '>> Water dispersable colloids', '>>> High-energy water dispersible colloids', '>>> Low-energy water dispersible colloids', '> Texture', '>> USDA/WRB soil texture', '>>> Sand (unspecified, S)', '>>> Loamy sand (LS)', '>>> Sandy loam (SL)', '>>> Sandy clay loam (SCL)', '>>> Silt loam (SiL)', '>>> Silty clay loam (SiCL)', '>>> Clay loam (CL)', '>>> Loam (L)', '>>> Silt (Si)', '>>> Sandy clay (SC)', '>>> Silty clay (SiC)', '>>> Clay (C)', '>>> Heavy clay (HC)', '>>> Very fine sand (VFS)', '>>> Fine sand (FS)', '>>> Medium sand (MS)', '>>> Coarse sand (CS)', '>>> Sand, unsorted (US)', '>>> Loamy very fine sand (LVFS)', '>>> Loamy fine sand (LFS)', '>>> Loamy coarse sand (LCS)', '>>> Fine sandy loam (FSL)', '>>> Coarse sandy loam (CSL)', '>> German soil texture', '>>> Sand (Ss)', '>>> Slightly loamy Sand (Sl2)', '>>> Medium loamy Sand (Sl3)', '>>> Very loamy Sand (Sl4)', '>>> Loamy silty Sand (Slu)', '>>> Slightly clayey Sand (St2)', '>>> Medium clayey Sand (St3)', '>>> Slightly silty Sand (Su2)', '>>> Medium silty Sand (Su3)', '>>> Very silty Sand (Su4)', '>>> Slightly sandy Loam (Ls2)', '>>> Medium sandy Loam (Ls3)', '>>> Very sandy Loam (Ls4)', '>>> Slightly clayey Loam (Lt2)', '>>> Medium clayey Loam (Lt3)', '>>> Sandy clayey Loam (Lts)', '>>> Silty Loam (Lu)', '>>> Silt (Uu)', '>>> Sandy loamy Silt (Uls)', '>>> Sandy Silt (Us)', '>>> Slightly clayey Silt (Ut2)', '>>> Medium clayey Silt (Ut3)', '>>> Very clayey Silt (Ut4)', '>>> Clay (Tt)', '>>> Loamy Clay (Tl)', '>>> Slightly silty Clay (Tu2)', '>>> Medium silty Clay (Tu3)', '>>> Very silty Clay (Tu4)', '>>> Slightly sandy Clay (Ts2)', '>>> Medium sandy Clay (Ts3)', '>>> Very sandy Clay (Ts4)', 'Structure', '> Bulk density', '> Porosity', '>> Total porosity', '>> Macroporosity', '>> Microporosity', '>> Air-filled porosity', '>>> Air capacity', '>> Residual porosity', '>> Mesoporosity', '>> Void ratio', '> Pore-space morphology and topology', '>> Pore diameter', '>> Median pore diameter', '>> Pore connectivity', '>> Tortuosity', '> Aggregate', '>> Aggregate mean diameter', '>> Aggregate geometric mean diameter', '>> Aggregate mean weight diameter (MWD)', '>> Microaggregates', '>> Macroaggregates', '>> Aggregate volume', '> Soil volume', '> Field description of soil structure', '>> Structure shape', '>> Structure grade', 'Water flow and retention', '> Water content', '>> Volumetric water content', '>> Gravimetric water content', '>>> Gravimetric water content at plastic limit', '>> Water-filled pore space', '> Water retention curve', '>> Saturated water content', '>> Residual water content', '>> Air-entry potential', '>> Volumetric water content at field capacity', '>>> Volumetric water content at pF 2', '>>> Volumetric water content at pF 2.5', '>> Volumetric water content at pF 4.2', '>> Available water capacity', '>> Least limiting water range', '>> S index', '>> Effective saturation', '> Saturated hydraulic conductivity', '> Matric potential', '> Water infiltration rate', '> Pressure head', '> Soil water repellency', '>> Contact angle (water)', '>> Soil water repellancy markers', '>>> Fatty acids (of DCM/MeOH soluble fraction)', '>>> Alcohols (of DCM/MeOH soluble fraction)', '>>> Alkanes (of DCM/MeOH soluble fraction)', '>>> Fatty acids (of DCM/MeOH insoluble fraction of IPA/NHÂ³ extract)', '>>> Alcohols (of DCM/MeOH insoluble fraction of IPA/NHÂ³ extract)', '>>> Ï‰-hydroxy fatty acids (of DCM/MeOH insoluble fraction of IPA/NHÂ³ extract)', '>>> Î±,Ï‰-dicarboxylic acids (of DCM/MeOH insoluble fraction of IPA/NHÂ³ extract)', '>>> Fatty acids (of DCM/MeOH soluble fraction of IPA/NHÂ³ extract)', '>>> Alcohols (of DCM/MeOH soluble fraction of IPA/NHÂ³ extract)', '>>> Ï‰-hydroxy fatty acids (of DCM/MeOH soluble fraction of IPA/NHÂ³ extract)', 'Gas transport', '> Gas diffusion coefficient', '> Air permeability', '> Relative gas diffusion coefficient', 'Specific surface area', '> BET specific surface area', '> EGME specific surface area', 'Mechanical properties', '> Aggregate stability', '>> Aggregate stability index (more is better)', '>> Water-stable aggregates', '>> Water-dispersible clay content', '>> Water-stable microaggregates', '> Penetration resistance', '> Shear strength', '> Tensile strength', '> Specific rupture energy', '> Friability', '> Erosion', '>> Splash erosion', '>> Sediment loss', '>> Runoff depth', '>> Time of runoff start', '> Natural surface sealing (crust formation)', '> Compaction', '>> Degree of compactness', '>> Reference bulk density', 'Soil temperature'],
+    'Month': ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+}
+
+# check controlled vocabulary and raise new words introduced
+def checkVocabulary(dfdic, dic=None):
+    global dropDownList
+    if dic is None:
+        dic = {}
+    newWords = {}
+    for key in dfdic.keys():
+        df = dfdic[key]
+        for col in df.columns:
+            if col in dropDownList.keys():
+                status = 'ok'
+                voc = df[col].dropna().unique()
+                cvoc = dropDownList[col]
+                ie = np.in1d(voc, cvoc)
+                if np.sum(~ie) > 0:
+                    status = 'new words: ' + ", ".join(voc[~ie]) + ' not in drop-down list'# + str(cvoc)
+                    newWords[col] = list(voc[~ie])
+                    dump('{:s} > {:s}: {:s}'.format(key, col, status), 'warning')
+                #print('check: {:25s} > {:50s}: {:s}'.format(key, col, status))
+    dic['newWords'] = newWords
+    if len(newWords) == 0:
+        dump('All vocabulary used already in drop-down list', 'success')
+    
+# multiply 'all treatments' to enter it in the relational database
+def multiplyTreatments(dfdic):
+    tocheck = ['tillage', 'crops', 'amendment', 'irrigation', 'grazing', 'pest-weed']
+    dftreat = dfdic['treatment']
+    dfdic2 = dfdic.copy()
+    for a in tocheck:
+        if a in dfdic.keys():
+            df = dfdic[a]
+            ie = df['Treatment ID'] == 'all treatments'
+            df2 = df[~ie].reset_index(drop=True)
+            toadd = []
+            for i in np.where(ie)[0]:
+                row = df.loc[i, :].to_dict()
+                #print('Sheet "{:s}" > experiment "{:s}" expanded'.format(
+                #a, row['Experiment ID']))
+                ie = dftreat['Experiment ID'] == row['Experiment ID']
+                treatmentIDs = dftreat[ie]['Treatment ID'].values
+                for treatmentID in treatmentIDs:
+                    row['Treatment ID'] = treatmentID
+                    toadd.append(row.copy())
+            df2 = df2.append(pd.DataFrame(toadd))
+            dfdic2[a] = df2.reset_index(drop=True)
+    return dfdic2
+
+str2col = {
+    'experiment': {
+        "Multiple experiments can be specified here. Alternatively, you can fill up multiple excel documents new ID to set Experiment ID text": "Experiment ID",
+        "important/all Experiment reference text (as usually used in publication)": "Experiment reference",
+        "important/all Latitude decimal degrees (+: East, -: West)": "Latitude",
+        "important/all Longitude decimal degrees (+: North, -:South)": "Longitude",
+        "useful Country choice": "Country",
+        "useful Location text": "Location",
+        "useful Land use prior experiment choice": "Land use prior experiment",
+        "useful Experiment type choice": "Experiment type",
+        "Experiment (comment) text": "Experiment (comment)",
+    }, 
+    'reference': {
+        "Publications that refers to the experiments can be added here. Experiment ID choice": "Experiment ID",
+        "useful Publication type choice": "Publication type",
+        "important/all Publication DOI ex: 10.1003/vzj2003": "Publication DOI",
+        "important/all Publication first author text": "Publication first author",
+        "important/all Publication year year": "Publication year",
+        "important/all Publication title text": "Publication title",
+        "useful Publication first author institution text": "Publication first author institution",
+        "useful Publication journal text": "Publication journal",
+        "useful Publication issue month-year or number": "Publication issue",
+        "Data entry person = person entering the data/metadata into the template important Data entry person text": "Data entry person",
+        "important Data entry person email email": "Data entry person email",
+        "useful Date entry person institution text": "Date entry person institution",
+        "Reference (comment) text": "Reference (comment)",
+    },
+    'soil-type': {
+        "used in data- tabs Publication ID automatically filled": "Publication ID",
+        "Soil information layer per layer. Experiment ID choice": "Experiment ID",
+        "important/all Top depth of layer cm (positive)": "Top depth of layer",
+        "important/all Bottom depth of layer cm (positive)": "Bottom depth of layer",
+        "important/all Clay (< 0.002 mm) mass%": "Clay (< 0.002 mm)",
+        "useful Silt (0.002 - 0.05 mm) mass%": "Silt (0.002 - 0.05 mm)",
+        "useful Sand (0.05 - 2 mm) mass%": "Sand (0.05 - 2 mm)",
+        "useful Gravel (> 2 mm) mass%": "Gravel (> 2 mm)",
+        "important/all Soil texture USDA choice": "Soil texture USDA",
+        "useful Soil group WRB choice": "Soil group WRB",
+        "useful Soil group WRB qualifier choice": "Soil group WRB qualifier",
+        "useful Soil group WRB specifier choice": "Soil group WRB specifier",
+        "useful Soil type USDA choice": "Soil type USDA",
+        "useful Soil type USDA qualifier choice": "Soil type USDA qualifier",
+        "Soil (comment) text": "Soil (comment)",
+    },
+    'treatment': {
+        "Inside an experiment, each treatment needs to be specified in a separate row, including the so-called reference treatment(s) (one treatment is the a combination of factors: no till + N, no till + P, till + N, till + P) Experiment ID choice": "Experiment ID",
+        "new ID to set Treatment ID text": "Treatment ID",
+        "important/all Treatment definition text": "Treatment definition",
+        "important/all Land use choice": "Land use",
+        "important/all Year started year": "Year started",
+        "important/all Year ended year (blank if not ended)": "Year ended",
+        "important/T2.1/T2.2/T2.3/T2.6 Crop rotation choice": "Crop rotation",
+        "Treatment (comment) text": "Treatment (comment)",
+    },
+    'tillage': {
+        "Tillage for each treatment and rotation. Several rows could be added for the same treatment if more than one tilliage is performed. Experiment ID choice": "Experiment ID",
+        "Treatment ID choice": "Treatment ID",
+        "Rotation choice": "Rotation",
+        "important/T2.4 Tillage system choice": "Tillage system",
+        "useful Tillage method choice": "Tillage method",
+        "important/T2.4 Tillage depth cm": "Tillage depth",
+        "useful Permanent soil area covered by residues or crops choice": "Permanent soil area covered by residues or crops",
+        "useful Tillage period date": "Tillage period",
+        "Tillage (comment) text": "Tillage (comment)",
+    }, 
+    'crops': {
+        "Specify main/catch/cover crop and possible rotations. If multiple species in treatment (either cover crop mix or cover crop and cash crop), just duplicate the rows. Experiment ID choice": "Experiment ID",
+        "Treatment ID choice": "Treatment ID",
+        "Rotation choice": "Rotation",
+        "Crop ID automatic": "Crop ID",
+        "important/T2.1/T2.2/T2.3/T2.6 Crop type choice": "Crop type",
+        "important/T2.1/T2.2/T2.3/T2.6 Cropping system choice": "Cropping system",
+        "important/T2.1/T2.2/T2.3/T2.6 Crop choice": "Crop",
+        "important/T2.1/T2.2/T2.3/T2.6 Harvesting/Termination method choice": "Harvesting/Termination method",
+        "important/T2.1/T2.2/T2.3/T2.6 Harvesting frequency times.year-1": "Harvesting frequency",
+        "useful Sowing period month": "Sowing period",
+        "useful Harvesting/Termination period month": "Harvesting/Termination period",
+        "important/T2.3 Residues removal choice": "Residues removal",
+        "important/T2.3 Residues incorporation choice": "Residues incorporation",
+        "important/T2.3 Residues burning yes/no": "Residues burning",
+        "Residues (comment) text": "Residues (comment)",
+        "Crop (comment) text": "Crop (comment)",
+    },
+    'amendment': {
+        "Specify fertilizer/amendment amount and its frequency. If multiple fertilizer/amendment, add rows. Experiment ID choice": "Experiment ID",
+        "Treatment ID choice": "Treatment ID",
+        "Rotation choice": "Rotation",
+        "important/WP3 Type of fertilizer/amendment choice": "Type of fertilizer/amendment",
+        "useful Fertilizer/Amendment application rate yearly amount (see units)": "Fertilizer/Amendment application rate",
+        "useful Fertilizer/Amendment application rate units kg.ha-1.year-1 or m3.ha-1.year-1": "Fertilizer/Amendment application rate units",
+        "useful Fertilizer/Amendment application method choice": "Fertilizer/Amendment application method",
+        "data useful Amendment water content g/g": "Amendment water content",
+        "data useful Amendment C kg.ha-1": "Amendment C",
+        "data useful Amendment N kg.ha-1": "Amendment N",
+        "data useful Amendment P kg.ha-1": "Amendment P",
+        "data useful Amendment K kg.ha-1": "Amendment K",
+        "Amendment (comment) text": "Amendment (comment)",
+    },
+    'irrigation': {
+        "Irrigation Experiment ID choice": "Experiment ID",
+        "Treatment ID choice": "Treatment ID",
+        "Rotation choice": "Rotation",
+        "important/T2.5 Irrigation method choice": "Irrigation method",
+        "important/T2.5 Amount of water m3.ha-1 per growing season": "Amount of water",
+        "useful Irrigation frequency times per growing season": "Irrigation frequency",
+        "useful Irrigation water choice": "Irrigation water",
+        "useful Drainage system choice": "Drainage system",
+        "useful Drainage spacing cm": "Drainage spacing",
+        "useful Drainage depth cm (positive)": "Drainage depth",
+        "Irrigation (comment) text": "Irrigation (comment)",
+    },
+    'data-crop': {
+        "don't be afraid to have an empty cell if the variable is not available for date and time specified Publication ID choice": "Publication ID",
+        "Experiment ID choice": "Experiment ID",
+        "Treatment ID choice": "Treatment ID",
+        "Crop ID choice": "Crop ID",
+        "useful Sampling year year": "Sampling year",
+        "important/all Harvested yield kg.ha-1": "Harvested yield",
+        "important/all Harvested yield water content categorial": "Harvested yield water content",
+        "useful Harvested yield water content amount mass%": "Harvested yield water content amount",
+        "important/T2.3 Residue above-ground t.ha-1 (dry matter)": "Residue above-ground",
+        "important/T2.2 Residue stubble t.ha-1 (dry matter)": "Residue stubble",
+        "important/T2.1 Residue roots t.ha-1 (dry matter)": "Residue roots",
+        "important/T2.4 Residue sampling method text": "Residue sampling method",
+        "useful Below-ground sampling depth cm": "Below-ground sampling depth",
+        "Data crop (comment) text": "Data crop (comment)",
+    },
+    'data-soil': {
+        "don't be afraid to have an empty cell if the variable is not available for date and time specified Publication ID choice": "Publication ID",
+        "Experiment ID choice": "Experiment ID",
+        "Treatment ID choice": "Treatment ID",
+        "important/all Sampling year year": "Sampling year",
+        "important/all Depth from cm": "Depth from",
+        "important/all Depth to cm": "Depth to",
+        "useful Time-serie available yes/no": "Time-serie available",
+        "important/all SOC conc % (g/kg)": "SOC conc",
+        "useful SOC conc SD % (g/kg)": "SOC conc SD",
+        "useful SOC conc SE % (g/kg)": "SOC conc SE",
+        "useful SOC conc nb samples number (used for SD -> SE)": "SOC conc nb samples",
+        "important/all Analysis method choice": "Analysis method",
+        "important/all Bulk density Mg.m-3": "Bulk density",
+        "useful Bulk density method choice": "Bulk density method",
+        "useful Bulk density SD Mg.m-3": "Bulk density SD",
+        "useful Bulk density SE Mg.m-3": "Bulk density SE",
+        "useful Bulk density nb samples number (used for SD -> SE)": "Bulk density nb samples",
+        "useful SOC stock Mg.ha-1": "SOC stock",
+        "useful SOC stock SD Mg.ha-1": "SOC stock SD",
+        "useful SOC stock SE Mg.ha-1": "SOC stock SE",
+        "useful SOC stock nb samples number (used for SD -> SE)": "SOC stock nb samples",
+        "useful pH -": "pH",
+        "useful pH method choice": "pH method",
+        "Data soil (comment) text": "Data soil (comment)",
+    }
+}
+            `)
+        
+
+            document.getElementById('loading').innerText = 'Loading...done'
+        
+            
+            // Pyodide is now ready to use...
+            console.log(pyodide.runPython(`
+                import sys
+                sys.version
+            `))
+
+            async function checkBtnFunc() {
+                let templateURL = document.getElementById('templateURL').value
+                let out = document.getElementById('output').innerHTML
+                let btn = document.getElementById('checkBtn')
+                btn.innerHTML = 'Checking...'
+                btn.setAttribute('class', 'btn btn-warning')
+                await pyodide.runPython(`
+logdic = {}
+dfdic = readExcel('` + templateURL + `')
+                `)
+                out = pyodide.globals.out
+
+                // do other check here one by one and append the variable out
+                await pyodide.runPython('dfdic = checkID(dfdic, dic=logdic, fix=False)')
+                document.getElementById('output').innerHTML = pyodide.globals.get('out')
+
+                await pyodide.runPython('dfdic = checkType(dfdic, dic=logdic, fix=False)')
+                document.getElementById('output').innerHTML = pyodide.globals.get('out')
+
+                await pyodide.runPython('dfdic = multiplyTreatments(dfdic)')
+                document.getElementById('output').innerHTML = pyodide.globals.get('out')
+
+                await pyodide.runPython('dfdic = checkTreatmentID(dfdic, dic=logdic, fix=True)')
+                document.getElementById('output').innerHTML = pyodide.globals.get('out')
+
+                await pyodide.runPython('checkVocabulary(dfdic, dic=logdic)')
+                document.getElementById('output').innerHTML = pyodide.globals.get('out')
+
+                btn.innerHTML = 'Check template'
+                btn.setAttribute('class', 'btn btn-primary')
+
+            }
+            document.getElementById('checkBtn').addEventListener('click', checkBtnFunc)
+
+            // automatically start test if url provided
+            if (document.getElementById('templateURL').value != '') {
+                checkBtnFunc()
+            }
+        }
+
+        main()
+
+       
+
+
+    </script>
+
+    <!-- Boostrap scripts (at the end of the page for faster loading time)-->
+	<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/js/bootstrap.bundle.min.js" integrity="sha384-JEW9xMcG8R+pH31jmWH6WWP0WintQrMb4s7ZOdauHnUtxwoG2vI5DkLtS3qm9Ekf" crossorigin="anonymous"></script>
+</body>
