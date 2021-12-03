@@ -41,12 +41,15 @@
             pyodide = await loadPyodide({ indexURL : "https://cdn.jsdelivr.net/pyodide/v0.18.1/full/" })
             
             // load all functions used to check
-            await pyodide.loadPackage(['numpy', 'pandas'])
-            pyodide.runPython(`
+            await pyodide.loadPackage(['numpy', 'pandas', 'micropip'])
+            await pyodide.runPythonAsync('import micropip; micropip.install("openpyxl")')
+            await pyodide.runPythonAsync(`
 import pandas as pd
 import numpy as np
 import time
 import pyodide
+from io import BytesIO
+from js import fetch
 
 sheetNames = ['experiment', 'reference', 'treatment', 'soil-type', 'tillage', 'crops',
               'amendment', 'irrigation', 'pest-weed', 'grazing',
@@ -58,9 +61,32 @@ def dump(text, level='warning'):
     out += '<div class="alert alert-{:s}" role="alert">{:s}</div>'.format(level, text)
     # trigger some plotting of out in the JS
   
+async def readExcel(fname):
+    if fname[:4] == 'http': # it's a google sheet url
+        fname = '/'.join(fname.split('/')[:-1] + ['export?format=xlsx'])
+        response = await fetch(fname)
+        js_buffer = await response.arrayBuffer()
+        dfdic = pd.read_excel(BytesIO(js_buffer.to_py()), sheet_name=None, skiprows=[0, 1, 3], engine='openpyxl')
+    else:
+        dfdic = pd.read_excel(fname, sheet_name=None, skiprows=[0, 1, 3], engine='openpyxl')
+
+    # remove Unnamed columns and nan rows
+    for key in dfdic.keys():
+        ie = dfdic[key].columns.str.contains('Unnamed')
+        dfdic[key] = dfdic[key].dropna(how='all', axis=0).drop(dfdic[key].columns[ie], axis=1).reset_index(drop=True)
+
+    # make all ID as string
+    for key in dfdic:
+        for dtype in ['Experiment ID', 'Treatment ID']:
+            if dtype in dfdic[key].columns:
+                dfdic[key][dtype] = dfdic[key][dtype].astype(str)
+
+    return dfdic
+
+#dfdic = await readExcel('https://docs.google.com/spreadsheets/d/1aVowuuz5-Ot2RiXViKudeZt9iKHmgkColuXVHWHl_sU/edit#gid=413400899')
 
 
-def readExcel(url):
+def readExcel2(url):
     sheetNames = ['experiment', 'reference', 'soil-type', 'treatment', 
                   'tillage', 'crops', 'amendment', 'irrigation', 'data-crop', 'data-soil']
     dfdic = {}
@@ -388,17 +414,17 @@ dropDownList = {
 
 # check controlled vocabulary and raise new words introduced
 def checkVocabulary(dfdic, dic=None):
-    global dropDownList
     if dic is None:
         dic = {}
+    dfdrop = dfdic['dropDownList']
     newWords = {}
     for key in dfdic.keys():
         df = dfdic[key]
         for col in df.columns:
-            if col in dropDownList.keys():
+            if col in dfdrop.columns:
                 status = 'ok'
                 voc = df[col].dropna().unique()
-                cvoc = dropDownList[col]
+                cvoc = dfdrop[col].dropna().values
                 ie = np.in1d(voc, cvoc)
                 if np.sum(~ie) > 0:
                     status = 'new words: ' + ", ".join(voc[~ie]) + ' not in drop-down list'# + str(cvoc)
@@ -408,7 +434,7 @@ def checkVocabulary(dfdic, dic=None):
     dic['newWords'] = newWords
     if len(newWords) == 0:
         dump('All vocabulary used already in drop-down list', 'success')
-    
+        
 # multiply 'all treatments' to enter it in the relational database
 def multiplyTreatments(dfdic):
     tocheck = ['tillage', 'crops', 'amendment', 'irrigation', 'grazing', 'pest-weed']
@@ -605,26 +631,30 @@ str2col = {
                 let btn = document.getElementById('checkBtn')
                 btn.innerHTML = 'Checking...'
                 btn.setAttribute('class', 'btn btn-warning')
-                await pyodide.runPython(`
+                await pyodide.runPythonAsync(`
 logdic = {}
-dfdic = readExcel('` + templateURL + `')
-                `)
-                out = pyodide.globals.out
+dfdic = await readExcel('` + templateURL + `')
+df = dfdic['reference']
+dfdic['reference'] = df[df['Publication ID'].ne('__')].reset_index(drop=True)
+df = dfdic['crops']
+dfdic['crops'] = df[df['Crop ID'].ne('___')].reset_index(drop=True)
+               `)
+                console.log('xlsx template retrieved and parsed')
 
                 // do other check here one by one and append the variable out
-                await pyodide.runPython('dfdic = checkID(dfdic, dic=logdic, fix=False)')
+                pyodide.runPython('dfdic = checkID(dfdic, dic=logdic, fix=False)')
                 document.getElementById('output').innerHTML = pyodide.globals.get('out')
 
-                await pyodide.runPython('dfdic = checkType(dfdic, dic=logdic, fix=False)')
+                pyodide.runPython('dfdic = checkType(dfdic, dic=logdic, fix=False)')
                 document.getElementById('output').innerHTML = pyodide.globals.get('out')
 
-                await pyodide.runPython('dfdic = multiplyTreatments(dfdic)')
+                pyodide.runPython('dfdic = multiplyTreatments(dfdic)')
                 document.getElementById('output').innerHTML = pyodide.globals.get('out')
 
-                await pyodide.runPython('dfdic = checkTreatmentID(dfdic, dic=logdic, fix=True)')
+                pyodide.runPython('dfdic = checkTreatmentID(dfdic, dic=logdic, fix=True)')
                 document.getElementById('output').innerHTML = pyodide.globals.get('out')
 
-                await pyodide.runPython('checkVocabulary(dfdic, dic=logdic)')
+                pyodide.runPython('checkVocabulary(dfdic, dic=logdic)')
                 document.getElementById('output').innerHTML = pyodide.globals.get('out')
 
                 btn.innerHTML = 'Check template'
@@ -635,6 +665,7 @@ dfdic = readExcel('` + templateURL + `')
 
             // automatically start test if url provided
             if (document.getElementById('templateURL').value != '') {
+                //console.log('would have run the auto test but will wait')
                 checkBtnFunc()
             }
         }
