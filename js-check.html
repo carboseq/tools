@@ -13,7 +13,7 @@
         <h1>EJPsoil automatic template check</h1>
         <p id='loading'>Loading...</p>
         <input id='templateURL' type="text" class="form-control" placeholder="Template URL" aria-label="Template URL" aria-describedby="basic-addon1">
-        <button id='checkBtn' type="button" class="btn btn-warning">Checking...</button>
+        <button id='checkBtn' type="button" class="btn btn-primary">Check template</button>
         <div id='output'></div>
         <footer>v0.1.0 made using <a href="https://pyodide.org/">pyodide</a></a></footer>
     </div>
@@ -26,10 +26,10 @@
         const url = new URLSearchParams(queryString)
         var c = url.get("template")
         console.log(c)
+        let btn = document.getElementById('checkBtn')
         if (c != undefined) {
             document.getElementById('templateURL').value = c
         } else {
-            let btn = document.getElementById('checkBtn')
             btn.innerHTML = 'Check template'
             btn.setAttribute('class', 'btn btn-primary')
                 
@@ -617,7 +617,8 @@ str2col = {
         
 
             document.getElementById('loading').innerText = 'Loading...done'
-        
+            btn.innerHTML = 'Checking...'
+            btn.setAttribute('class', 'btn btn-warning')
             
             // Pyodide is now ready to use...
             console.log(pyodide.runPython(`
@@ -634,6 +635,7 @@ str2col = {
                 await pyodide.runPythonAsync(`
 logdic = {}
 dfdic = await readExcel('` + templateURL + `')
+out = ''
 df = dfdic['reference']
 dfdic['reference'] = df[df['Publication ID'].ne('__')].reset_index(drop=True)
 df = dfdic['crops']
@@ -667,6 +669,9 @@ dfdic['crops'] = df[df['Crop ID'].ne('___')].reset_index(drop=True)
             if (document.getElementById('templateURL').value != '') {
                 //console.log('would have run the auto test but will wait')
                 checkBtnFunc()
+            } else {
+                btn.innerHTML = 'Check template'
+                btn.setAttribute('class', 'btn btn-primary')
             }
         }
 
