@@ -1,5 +1,5 @@
 {
   "VoilaConfiguration": {
-    "file_whitelist": "['.*.(xlsx|zip|csv)']"
+    "file_whitelist": "['.*']"
   }
 }
