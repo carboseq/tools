@@ -111,9 +111,17 @@ def readExcel2(url):
     # check for duplicated columns
     for key in dfdic.keys():
         df = dfdic[key]
-        if df.columns.unique().shape[0] != df.columns.shape[0]:
-            print('DUPLICATED COLUMNS', df.columns.value_counts())
-            dfdic[sheet] = dfdic[sheet][df.columns.unique()]
+        cols = []
+        icols = []
+        for i, col in enumerate(df.columns):
+            if col not in cols:
+                cols.append(col)
+                icols.append(i)
+            else:
+                print('DUPLICATED column', col)
+                dump('{:s} > duplicated columns: {:s} '.format(key, col), 'danger')
+        print(icols)
+        dfdic[key] = df.iloc[:, icols]  # drop duplicated columns
 
     # remove Unnamed columns and nan rows
     for key in dfdic.keys():
@@ -264,6 +272,21 @@ def checkType(dfdic, dic=None, fix=False):
     dic['wrong_types'] = wrongTypes
     return dfdic
 #checkType(dfdic)
+
+# check for added columns
+def checkColumns(dfdic, dic={}):
+    """Check for columns duplicated by users.
+    """
+    tdic = {}
+    for sheet in list(dfdic.keys())[2:-1]:
+        cols = dfdic[sheet].columns.tolist()
+        cols = [a.split('.')[0] for a in cols]
+        s = pd.Series(cols).value_counts()
+        if s.gt(1).sum() > 0:
+            dcols = s[s.gt(1)].index.tolist()
+            tdic[sheet] = dcols
+            dump('{:s} > duplicated columns: {:s} '.format(sheet, ', '.join(dcols)), 'error')
+    dic['dup_col'] = tdic
 
 # check that all ID colums contains unique values
 def checkID(dfdic, dic=None, fix=False):
@@ -789,16 +812,20 @@ str2col = {
                 btn.setAttribute('class', 'btn btn-warning')
                 await pyodide.runPythonAsync(`
 logdic = {}
-dfdic = readExcel2('` + templateURL + `')
 out = ''
+dfdic = readExcel2('` + templateURL + `')
 df = dfdic['reference']
 dfdic['reference'] = df[df['Publication ID'].ne('__')].reset_index(drop=True)
 df = dfdic['crops']
 dfdic['crops'] = df[df['Crop ID'].ne('___')].reset_index(drop=True)
                `)
                 console.log('xlsx template retrieved and parsed')
+                document.getElementById('output').innerHTML = pyodide.globals.get('out')
 
                 // do other check here one by one and append the variable out
+                //pyodide.runPython('checkColumns(dfdic, dic=logdic)')
+                //document.getElementById('output').innerHTML = pyodide.globals.get('out')
+
                 pyodide.runPython('dfdic = checkID(dfdic, dic=logdic, fix=False)')
                 document.getElementById('output').innerHTML = pyodide.globals.get('out')
 
