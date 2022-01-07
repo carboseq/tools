@@ -97,17 +97,21 @@ def readExcel2(url):
     for sheet in sheetNames:
         df = pd.read_csv(pyodide.open_url(url.split('/edit')[0] + '/gviz/tq?tqx=out:csv&sheet=' + sheet + '&headers=4'))
         cols = df.columns.tolist()
-        vals = np.array(str2col[sheet])
-        lvals = [len(a) for a in vals]
-        vals = vals[np.argsort(lvals)]  # sorted from shortest to longest
-        dic = {}
-        for col in cols:
-            for val in vals:
-                if val in col:
-                    dic[col] = val
-        print(dic)
-        dfdic[sheet] = df.rename(columns=dic)#str2col[sheet])
-    
+        if 'CarboSeq Template WP2 (common framework)' in cols[0]:
+            # it's a carboseq template the sheet does not exist
+            pass
+        else:
+            vals = np.array(str2col[sheet])
+            lvals = [len(a) for a in vals]
+            vals = vals[np.argsort(lvals)]  # sorted from shortest to longest
+            dic = {}
+            for col in cols:
+                for val in vals:
+                    if val in col:
+                        dic[col] = val
+            print(dic)
+            dfdic[sheet] = df.rename(columns=dic)#str2col[sheet])
+        
     # check for duplicated columns
     for key in dfdic.keys():
         df = dfdic[key]
@@ -180,6 +184,15 @@ ntypes = {
         #'Drainage spacing': 'float',
         #'Drainage depth': 'float',
     },
+    'pest-weed': {
+        'Pesticide application rate': 'float',
+    },
+    'grazing': {
+        'Grazing intensity': 'float',
+        'Grazing frequency': 'float',
+        'Livestock mean weight': 'float',
+        'Grazing days': 'float',
+    },
     'data-crop': {
         'Sampling year': 'float',
         'Harvested yield': 'float',
@@ -244,31 +257,32 @@ def checkType(dfdic, dic=None, fix=False):
         dic = {}
     wrongTypes = {}
     for sheet in ntypes.keys():
-        for col in ntypes[sheet].keys():
-            try:
-                dfdic[sheet][col] = dfdic[sheet][col].astype(ntypes[sheet][col])
-            except Exception as e:
-                # attempt to do automatic conversion
-                if fix:
-                    dfdic[sheet][col] = dfdic[sheet][col].apply(text2numFix)
-                else:
-                    dfdic[sheet][col] = dfdic[sheet][col].apply(text2num)
-
-                # second attempt to convert the entire column
-                etext = str(e).split(':')[-1]
+        if sheet in dfdic.keys():
+            for col in ntypes[sheet].keys():
                 try:
                     dfdic[sheet][col] = dfdic[sheet][col].astype(ntypes[sheet][col])
-                    if ',' in etext or '-' in etext:
-                        dump('{:s} > {:s}: Wrong type: {:s} automatically converted to {:s}'.format(
-                            sheet, col, str(e), str(text2numFix(etext.strip()[1:-1]))), 'info')
                 except Exception as e:
-                    dump('{:s} > {:s}: Wrong type: {:s}'.format(sheet, col, str(e)), 'warning')
-
-                    # log the columns that couldn't even be converted automatically
-                    if sheet in wrongTypes.keys():
-                        wrongTypes[sheet].append(col)
+                    # attempt to do automatic conversion
+                    if fix:
+                        dfdic[sheet][col] = dfdic[sheet][col].apply(text2numFix)
                     else:
-                        wrongTypes[sheet] = [col]
+                        dfdic[sheet][col] = dfdic[sheet][col].apply(text2num)
+
+                    # second attempt to convert the entire column
+                    etext = str(e).split(':')[-1]
+                    try:
+                        dfdic[sheet][col] = dfdic[sheet][col].astype(ntypes[sheet][col])
+                        if ',' in etext or '-' in etext:
+                            dump('{:s} > {:s}: Wrong type: {:s} automatically converted to {:s}'.format(
+                                sheet, col, str(e), str(text2numFix(etext.strip()[1:-1]))), 'info')
+                    except Exception as e:
+                        dump('{:s} > {:s}: Wrong type: {:s}'.format(sheet, col, str(e)), 'warning')
+
+                        # log the columns that couldn't even be converted automatically
+                        if sheet in wrongTypes.keys():
+                            wrongTypes[sheet].append(col)
+                        else:
+                            wrongTypes[sheet] = [col]
     dic['wrong_types'] = wrongTypes
     return dfdic
 #checkType(dfdic)
