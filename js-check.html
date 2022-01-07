@@ -3,7 +3,7 @@
 <head>
 	<meta charset="utf-8">
 	<link rel="shortcut icon" href="img/favicon.png" />
-	<title>EJP template checker (JS v0.1.0)</title>
+	<title>EJP template checker (JS v0.2.0)</title>
     <script src="https://code.jquery.com/jquery-3.4.1.min.js"></script>
 	<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-eOJMYsd53ii+scO/bJGFsiCZc+5NDVN2yr8+0RDqr0Ql0h+rP48ckxlpbzKgwra6" crossorigin="anonymous">
 	<script src="https://cdn.jsdelivr.net/pyodide/v0.18.1/full/pyodide.js"></script>
@@ -15,7 +15,7 @@
         <input id='templateURL' type="text" class="form-control" placeholder="Template URL" aria-label="Template URL" aria-describedby="basic-addon1">
         <button id='checkBtn' type="button" class="btn btn-primary">Check template</button>
         <div id='output'></div>
-        <footer>v0.1.0 made using <a href="https://pyodide.org/">pyodide</a></a></footer>
+        <footer>v0.2.0 made using <a href="https://pyodide.org/">pyodide</a></a></footer>
     </div>
 
 
@@ -43,6 +43,9 @@
             // load all functions used to check
             await pyodide.loadPackage(['numpy', 'pandas', 'micropip'])
             await pyodide.runPythonAsync('import micropip; micropip.install("openpyxl")')
+            // NOTE: the reading as io buffer and conversion to py object is sensitive to
+            // empty columns without header that are on the right (in some cases).
+            // keeping them generate a multi-level dataframe
             await pyodide.runPythonAsync(`
 import pandas as pd
 import numpy as np
@@ -88,10 +91,11 @@ async def readExcel(fname):
 
 def readExcel2(url):
     sheetNames = ['experiment', 'reference', 'soil-type', 'treatment', 
-                  'tillage', 'crops', 'amendment', 'irrigation', 'data-crop', 'data-soil']
+                  'tillage', 'crops', 'amendment', 'irrigation', 'data-crop', 'data-soil',
+                'dropDownList']
     dfdic = {}
     for sheet in sheetNames:
-        df = pd.read_csv(pyodide.open_url(url.split('/edit')[0] + '/gviz/tq?tqx=out:csv&sheet=' + sheet))
+        df = pd.read_csv(pyodide.open_url(url.split('/edit')[0] + '/gviz/tq?tqx=out:csv&sheet=' + sheet + '&headers=4'))
         dfdic[sheet] = df.rename(columns=str2col[sheet])
     return dfdic
 
@@ -465,6 +469,8 @@ str2col = {
         "important/all Experiment reference text (as usually used in publication)": "Experiment reference",
         "important/all Latitude decimal degrees (+: East, -: West)": "Latitude",
         "important/all Longitude decimal degrees (+: North, -:South)": "Longitude",
+        "important/all Latitude decimal degrees (+: North, -:South)": "Latitude",
+        "important/all Longitude decimal degrees (+: East, -: West)": "Longitude",
         "useful Country choice": "Country",
         "useful Location text": "Location",
         "useful Land use prior experiment choice": "Land use prior experiment",
@@ -485,6 +491,7 @@ str2col = {
         "important Data entry person email email": "Data entry person email",
         "useful Date entry person institution text": "Date entry person institution",
         "Reference (comment) text": "Reference (comment)",
+        "used in data- tabs Publication ID automatically filled": "Publication ID"
     },
     'soil-type': {
         "used in data- tabs Publication ID automatically filled": "Publication ID",
@@ -594,9 +601,9 @@ str2col = {
         "important/all Depth from cm": "Depth from",
         "important/all Depth to cm": "Depth to",
         "useful Time-serie available yes/no": "Time-serie available",
-        "important/all SOC conc % (g/kg)": "SOC conc",
-        "useful SOC conc SD % (g/kg)": "SOC conc SD",
-        "useful SOC conc SE % (g/kg)": "SOC conc SE",
+        "important/all SOC conc g.kg-1": "SOC conc",
+        "useful SOC conc SD g.kg-1": "SOC conc SD",
+        "useful SOC conc SE g.kg-1": "SOC conc SE",
         "useful SOC conc nb samples number (used for SD -> SE)": "SOC conc nb samples",
         "important/all Analysis method choice": "Analysis method",
         "important/all Bulk density Mg.m-3": "Bulk density",
@@ -611,6 +618,46 @@ str2col = {
         "useful pH -": "pH",
         "useful pH method choice": "pH method",
         "Data soil (comment) text": "Data soil (comment)",
+    },
+    'dropDownList': {
+        "Please do not edit this sheet, it is only used for drop-down menu experiment Country list": "Country",
+        "experiment Land use prior experiment list": "Land use prior experiment",
+        "experiment Experiment type list": "Experiment type",
+        "reference Publication type list": "Publication type",
+        "soil-type Soil Texture list": "Soil Texture",
+        "deviation from Bonares in yellow soil-type Soil group WRB list": "Soil group WRB",
+        "soil-type Soil group WRB qualifier list": "Soil group WRB qualifier",
+        "soil-type Soil group WRB specifier list": "Soil group WRB specifier",
+        "soil-type Soil type USDA list": "Soil type USDA",
+        "soil-type Soil type USDA qualifier list": "Soil type USDA qualifier",
+        "treatment Treatments list": "Treatments",
+        "treatment Land use list": "Land use",
+        "treatment Crop rotation list": "Crop rotation",
+        "crops Rotation year list": "Rotation year",
+        "crops Rotation list": "Rotation",
+        "crops Crop type list": "Crop type",
+        "crops Cropping system list": "Cropping system",
+        "crops Crop list": "Crop",
+        "crops Harvesting/Termination method list": "Harvesting/Termination method",
+        "crops Residues removal list": "Residues removal",
+        "crops Residues incorporation list": "Residues incorporation",
+        "crops yesNo list": "yesNo",
+        "tillage Tillage system list": "Tillage system",
+        "tillage Tillage method list": "Tillage method",
+        "tillage Permanent soil area covered by residues or crops list": "Permanent soil area covered by residues or crops",
+        "tillage Season list": "Season",
+        "amendment Type of fertilizer/amendment list": "Type of fertilizer/amendment",
+        "amendment Units list": "Units",
+        "amendment Fertilizer/Amendment application method list": "Fertilizer/Amendment application method",
+        "irrigation Irrigation method list": "Irrigation method",
+        "irrigation Irrigation water list": "Irrigation water",
+        "irrigation Drainage system list": "Drainage system",
+        "data-soil Measurement method list": "Measurement method",
+        "data-soil Bulk density method list": "Bulk density method",
+        "data-soil pH method list": "pH method",
+        "data-crop Harvested yield water content list": "Harvested yield water content",
+        "for info (don't review) Measurement list": "Measurement",
+        "for info (don't review) Month list": "Month",
     }
 }
             `)
@@ -629,12 +676,13 @@ str2col = {
             async function checkBtnFunc() {
                 let templateURL = document.getElementById('templateURL').value
                 let out = document.getElementById('output').innerHTML
+                out.innerHTML = "<p>processing...</p>"
                 let btn = document.getElementById('checkBtn')
                 btn.innerHTML = 'Checking...'
                 btn.setAttribute('class', 'btn btn-warning')
                 await pyodide.runPythonAsync(`
 logdic = {}
-dfdic = await readExcel('` + templateURL + `')
+dfdic = readExcel2('` + templateURL + `')
 out = ''
 df = dfdic['reference']
 dfdic['reference'] = df[df['Publication ID'].ne('__')].reset_index(drop=True)
