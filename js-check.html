@@ -783,8 +783,7 @@ str2col = {
 
             async function checkBtnFunc() {
                 let templateURL = document.getElementById('templateURL').value
-                let out = document.getElementById('output').innerHTML
-                out.innerHTML = "<p>processing...</p>"
+                document.getElementById('output').innerHTML = "<p>processing...</p>"
                 let btn = document.getElementById('checkBtn')
                 btn.innerHTML = 'Checking...'
                 btn.setAttribute('class', 'btn btn-warning')
