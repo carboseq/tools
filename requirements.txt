@@ -2,7 +2,6 @@ numpy
 matplotlib
 pandas
 sqlalchemy
-ipywidgets
 xlrd
 openpyxl
 bqplot
@@ -15,3 +14,4 @@ upsetplot
 ipyleaflet
 xlsxwriter
 tqdm
+ipywidgets<8.0
