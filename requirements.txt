@@ -14,4 +14,4 @@ upsetplot
 ipyleaflet
 xlsxwriter
 tqdm
-ipywidgets<8.0
+ipywidgets
